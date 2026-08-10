@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src http://localhost:* http://127.0.0.1:*;" />
+  <title>Hexo 博客管家</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="auth-view" class="auth-wrap hidden">
+    <div class="auth-card">
+      <div class="auth-brand"><span class="dot">📝</span> Hexo 博客管家</div>
+      <div class="auth-tabs">
+        <button id="auth-tab-login" class="auth-tab active" type="button">登录</button>
+        <button id="auth-tab-register" class="auth-tab" type="button">注册</button>
+      </div>
+      <form id="auth-form">
+        <div class="field"><label for="auth-username">用户名</label><input id="auth-username" autocomplete="off" /></div>
+        <div class="field"><label for="auth-password">密码</label><input id="auth-password" type="password" /></div>
+        <div class="field" id="auth-confirm-field"><label for="auth-confirm">确认密码</label><input id="auth-confirm" type="password" /></div>
+          <div id="auth-register-hint" class="auth-hint hidden">
+            <div class="auth-hint-title">📝 注册说明</div>
+            <ul class="auth-hint-list">
+              <li>支持注册多个本地账号，互相独立；本软件不连任何云端。</li>
+              <li>用户名不能与已有账号重复；密码至少 <b>4 位</b>。</li>
+              <li>两次输入的密码需一致，注册成功后即可登录使用。</li>
+              <li>密码以 bcrypt 哈希存储，不明文保存。</li>
+            </ul>
+            <div class="auth-hint-note">📧 3073922647@qq.com · 遇到 Bug 发邮件反馈即可，<b>请勿添加 QQ 好友</b>，谢谢谅解。</div>
+          </div>
+        <div class="auth-remember"><label class="auth-remember-label"><input type="checkbox" id="auth-remember" /> 记住密码（下次自动登录）</label></div>
+        <div id="auth-error" class="auth-error hidden"></div>
+        <button id="auth-submit" type="submit" class="btn primary">登录</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-view" class="app hidden">
+    <aside class="sidebar">
+      <div class="logo"><span class="dot">📝</span> Hexo 工作室</div>
+      <nav>
+        <button data-route="dashboard" class="nav-item active">🏠 首页</button>
+        <button data-route="posts" class="nav-item">📄 文章</button>
+        <button data-route="preview" class="nav-item">👁️ 本地预览</button>
+        <button data-route="themes" class="nav-item">🎨 主题与插件</button>
+        <button data-route="deploy" class="nav-item">🚀 部署</button>
+        <button data-route="settings" class="nav-item">⚙️ 设置</button>
+        <button data-route="profile" class="nav-item">👤 用户主页</button>
+      </nav>
+      <div class="user-box">
+        <span class="avatar">👤</span>
+        <span id="current-username" class="username">—</span>
+        <button id="logout-btn" class="logout" type="button" title="退出登录">退出</button>
+      </div>
+      <div class="sidebar-foot">Hexo Blog Manager · v1.0</div>
+    </aside>
+    <main id="content" class="content"></main>
+  </div>
+
+  <div id="env-gate" class="env-gate hidden">
+    <div class="env-gate-card">
+      <div class="env-gate-brand"><span class="dot">🛠️</span> 环境检测</div>
+      <div id="env-gate-user" class="muted-row" style="text-align:center;margin:0 0 6px"></div>
+      <div id="env-gate-body" class="env-gate-body"><div class="env-gate-loading">正在检测 Node.js / Hexo CLI / Git，请稍候…</div></div>
+      <div class="env-gate-actions">
+        <button id="env-gate-recheck" class="btn">重新检测</button>
+        <button id="env-gate-enter" class="btn primary" disabled>进入软件</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card"><p id="modal-text"></p>
+      <div class="modal-actions"><button id="modal-cancel">取消</button><button id="modal-ok" class="danger">确认</button></div>
+    </div>
+  </div>
+  <!-- 启动提醒弹窗：平台测试范围 + 联系方式 + 使用手册入口 -->
+  <div id="notice-modal" class="modal hidden">
+    <div class="modal-card notice-card">
+      <h2 class="notice-title">⚠️ 重要提醒</h2>
+      <div class="notice-body">
+        <p>目前本软件<b>仅在 Windows 上测试</b>，macOS 与 Linux 暂未测试，可能存在兼容性问题。</p>
+        <p>如发现 Bug，请及时反馈：</p>
+        <div class="notice-mail">
+          <span class="notice-mail-addr">📧 3073922647@qq.com</span>
+          <button class="btn ghost" id="notice-copy" type="button">复制邮箱</button>
+        </div>
+        <p class="notice-note">发邮件反馈即可，<b>请勿添加 QQ 好友</b>，谢谢谅解。</p>
+      </div>
+      <div class="notice-actions">
+        <button class="btn" id="notice-manual" type="button">查看使用手册</button>
+      </div>
+      <div class="notice-foot">
+        <label class="notice-ack"><input type="checkbox" id="notice-dont-show"/> 下次启动不再提醒</label>
+        <button class="btn primary" id="notice-ok" type="button">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 使用手册查看器：内嵌渲染 使用手册.md -->
+  <div id="manual-modal" class="modal hidden">
+    <div class="manual-card">
+      <div class="manual-head">
+        <h2>📘 使用手册</h2>
+        <button class="btn ghost" id="manual-close" type="button">关闭</button>
+      </div>
+      <div id="manual-body" class="manual-body">加载中…</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

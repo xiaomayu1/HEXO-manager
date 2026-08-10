@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+release/
+dist/
+out/
+
+# Logs
+*.log
+
+# 交接/调试期间随手留下的临时脚本与目录(下划线开头)
+_*.js
+_*.md
+_t/
+__tmp_patch/
+
+# 本机数据(sqlite 数据库与备份)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.bak
+*.bak.*
+
+# 系统/编辑器
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
