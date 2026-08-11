@@ -420,3 +420,86 @@ select { padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px
 .editor-modal-overlay #e-status { min-width: 96px; }
 .editor-modal-overlay .ef-actions { display: flex; gap: 8px; }
 .editor-modal-overlay #ed-preview { min-height: 0; }
+
+/* ===== Hexo 配置编辑系统（交接文档 §2.2 扩展）===== */
+.cfgsys-card {
+  width: min(1080px, 96vw); height: clamp(440px, 82vh, 800px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
+}
+.cfgsys-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px; border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(59,111,224,.05), transparent);
+}
+.cfgsys-title { display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 600; color: var(--text); }
+.cfgsys-logo {
+  width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px;
+  background: var(--accent-grad); color: #fff; font-size: 16px; box-shadow: 0 2px 6px rgba(59,111,224,.28);
+}
+.cfg-close { background: none; border: none; font-size: 24px; line-height: 1; color: var(--muted); cursor: pointer; padding: 2px 10px; border-radius: 8px; transition: background .12s, color .12s; }
+.cfg-close:hover { background: var(--panel-2); color: var(--text); }
+
+.cfgsys-body { flex: 1; display: grid; grid-template-columns: 248px 1fr; min-height: 0; }
+
+.cfgsys-files { border-right: 1px solid var(--border); background: var(--panel-2); display: flex; flex-direction: column; min-height: 0; }
+.cfgsys-files-head { padding: 12px 14px 8px; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-2); font-weight: 600; }
+.cfg-filelist { flex: 1; overflow: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 4px; }
+.cfg-file-item {
+  display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border-radius: 10px;
+  cursor: pointer; border: 1px solid transparent; transition: background .12s, border-color .12s;
+}
+.cfg-file-item:hover { background: var(--panel); }
+.cfg-file-item.active { background: var(--panel); border-color: var(--border); box-shadow: inset 3px 0 0 var(--accent); }
+.cfg-file-item .fname { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.cfg-file-item.active .fname { color: var(--accent); }
+.cfg-file-item .flabel { font-size: 11.5px; color: var(--muted); }
+.cfg-file-item .fbadge { align-self: flex-start; margin-top: 3px; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.cfg-file-item.active .fbadge { border-color: transparent; }
+.cfg-file-item .fbadge.kind-site { color: var(--ok); background: rgba(47,158,68,.12); border-color: rgba(47,158,68,.25); }
+.cfg-file-item .fbadge.kind-theme { color: var(--accent); background: rgba(59,111,224,.12); border-color: rgba(59,111,224,.25); }
+.cfgsys-files-foot { padding: 9px 14px 12px; font-size: 11px; color: var(--muted-2); border-top: 1px solid var(--border); word-break: break-all; }
+.cfgsys-files-foot b { color: var(--muted); font-weight: 600; }
+
+.cfgsys-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.cfg-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.cfg-curfile-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cfg-curfile { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; }
+.cfg-dirtydot { color: var(--warn); font-size: 13px; line-height: 1; transition: opacity .12s; }
+.cfg-peek-btn { padding: 6px 12px; font-size: 12.5px; }
+.cfg-peek-btn.on { background: var(--panel-2); color: var(--accent); border-color: var(--accent); }
+
+.cfg-editor-wrap { flex: 1; position: relative; display: flex; min-height: 0; background: var(--panel-2); }
+.config-gutter {
+  flex: 0 0 auto; width: 52px; padding: 12px 8px; overflow: hidden; white-space: pre; text-align: right;
+  background: var(--panel); color: var(--muted-2); border-right: 1px solid var(--border); user-select: none;
+  font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.6;
+}
+.config-gutter > div { will-change: transform; transform: translateY(0px); }
+.config-editor {
+  flex: 1; margin: 0; padding: 12px 14px; border: 0; resize: none; background: transparent; color: var(--text);
+  font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.6; white-space: pre; overflow: auto; tab-size: 2;
+}
+.config-editor:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+
+.cfg-peek-pane {
+  position: absolute; inset: 0; background: var(--panel-2); z-index: 2; overflow: auto;
+  padding: 12px 14px 12px 66px;
+}
+.cfg-readonly {
+  margin: 0; white-space: pre; font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.6; color: var(--text);
+}
+.yml-key { color: var(--accent); font-weight: 600; }
+.yml-comment { color: var(--muted-2); font-style: italic; }
+
+.recipe-note { margin: 0 16px; padding: 9px 12px 9px 14px; color: var(--warn); background: rgba(217,138,18,.08); border: 1px solid rgba(217,138,18,.25); border-left: 3px solid var(--warn); border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
+.config-actions { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
+.config-actions .cfg-spacer { flex: 1; }
+#cfg-save:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+
+@media (max-width: 760px) {
+  .cfgsys-card { width: 96vw; height: clamp(460px, 94vh, 820px); }
+  .cfgsys-body { grid-template-columns: 1fr; grid-template-rows: 132px 1fr; }
+  .cfgsys-files { border-right: none; border-bottom: 1px solid var(--border); }
+  .cfg-curfile { max-width: 40vw; }
+}

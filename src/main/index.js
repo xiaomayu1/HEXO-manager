@@ -7,6 +7,7 @@ const { spawnSync, spawn } = require('child_process');
 const { createApp } = require('../core/app');
 const { parseFrontMatter } = require('../core/scanner');
 const { recipeFor } = require('../core/pluginRecipes');
+const { highlightYaml } = require('../core/yamlHighlight');
 
 const sync = { slugify: require('../core/syncHexo').slugify, writePostFile: require('../core/syncHexo').writePostFile, deletePostFile: require('../core/syncHexo').deletePostFile };
 
@@ -103,7 +104,7 @@ function registerIpc() {
     const blogPath = blogPathOf();
     if (post && blogPath) {
       if (post.source_file && existing.source_file && post.source_file !== existing.source_file) {
-        sync.deletePostFile({}, blogPath, existing.source_file);
+        sync.deletePostFile({}, blogPath, existing.source_file, existing.status);
       }
       s = sync.writePostFile({}, blogPath, post);
     } else {
@@ -117,7 +118,7 @@ function registerIpc() {
     let s;
     const blogPath = blogPathOf();
     if (deleted && existing && existing.source_file && blogPath) {
-      s = sync.deletePostFile({}, blogPath, existing.source_file);
+      s = sync.deletePostFile({}, blogPath, existing.source_file, existing.status);
     } else {
       s = { skipped: true, reason: (!blogPath || !existing) ? '' : '该文章无关联文件' };
     }
@@ -162,16 +163,61 @@ function registerIpc() {
     return r;
   });
   handle('plugins:install', (pkg) => a.themes.installPlugin(blogPathOf(), pkg));
-  handle('plugins:uninstall', (pkg) => a.themes.uninstallPlugin(blogPathOf(), pkg));
-  // 通用 _config.yml 读写（写前自动增量备份）—— 交接文档 §3.4
-  handle('config:read', () => {
-    try { return { ok: true, text: a.themes.readBlogConfig(blogPathOf()) }; }
+  handle('plugins:uninstall', (pkg) => a.themes.uninstallPlugin(blogPathOf(), pkg));  // 通用 _config.yml 读写（写前自动增量备份）—— 交接文档 §3.4
+  handle('config:read', (fileName) => {
+    try {
+      const bp = blogPathOf();
+      const fn = String(fileName || '_config.yml');
+      const text = a.themes.readBlogConfigFile(bp, fn);
+      // 空（0 字节）的主题覆盖配置 _config.<theme>.yml：优先用主题自带 themes/<theme>/_config.yml
+      // 作为起点回填到编辑器（保存即写入根目录覆盖文件，Hexo 原生的 _config.<theme>.yml 约定）；
+      // 主题未安装则给出清晰说明而非沉默空白。站点 _config.yml 不在此回填。
+      if (String(text == null ? '' : text).trim() === '') {
+        const m = /^_config\.(.+)\.ya?ml$/i.exec(fn);
+        if (m) {
+          const theme = m[1];
+          const bundled = path.join(bp, 'themes', theme, '_config.yml');
+          let seed = null;
+          try { const cc = fs.readFileSync(bundled, 'utf8'); if (cc && String(cc).trim()) seed = cc; } catch (_) {}
+          if (seed) {
+            return { ok: true, text: seed, seeded: true, sourceFile: fn,
+              note: '当前文件为空（0 字节），已自动载入主题自带配置 themes/' + theme + '/_config.yml 作为起点。保存即写入根目录的 ' + fn + '（Hexo 主题覆盖配置）；若不需要可直接删除该空文件。' };
+          }
+          return { ok: true, text: '', sourceFile: fn,
+            note: '当前文件为空（0 字节）。Hexo 的 ' + fn + ' 是可选的主题覆盖配置，默认无需存在；且未在 themes/' + theme + '/ 找到主题自带配置可回填。可直接在此编辑后保存以创建，或删除此历史残留的空文件。' };
+        }
+      }
+      return { ok: true, text: text || '' };
+    } catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  handle('config:write', (text, fileName) => {
+    try { return a.themes.writeBlogConfigFile(blogPathOf(), fileName || '_config.yml', String(text == null ? '' : text)); }
     catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
   });
-  handle('config:write', (text) => {
-    try { return a.themes.writeBlogConfig(blogPathOf(), String(text == null ? '' : text)); }
+
+  // 主题级配置 _config.<theme>.yml 读写（写前同样自动备份）—— 交接文档 §2.2
+  handle('config:readTheme', () => {
+    try { return a.themes.readThemeConfig(blogPathOf()); }
     catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
   });
+  handle('config:writeTheme', (text) => {
+    try { return a.themes.writeThemeConfig(blogPathOf(), String(text == null ? '' : text)); }
+    catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });  // 编辑系统可用配置文件清单：_config.yml + 所有 _config.<theme>.yml（交接文档 §2.2 扩展）
+  handle('config:list', () => {
+    try { return a.themes.listBlogConfigFiles(blogPathOf()); }
+    catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  // 通用编辑器「恢复备份」：参数可为 'site'/'theme'/任意 _config*.yml 文件名，只读回内容供核对，绝不覆盖原文件（安全红线 §四）
+  handle('config:readBackup', (key) => {
+    try { return a.themes.readConfigBackup(blogPathOf(), key || 'site'); }
+    catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+
+
+  // 只读高亮：汇集工具处汋后返回 HTML（纯函数 yamlHighlight 在主进程执行，可单测）
+  handle('config:highlight', (t) => ({ ok: true, html: highlightYaml(String(t == null ? '' : t)) }));
+
   // 配方：先预演（dry-run）给用户看，确认后再应用 —— 交接文档 §3.4 / §八
   handle('plugins:previewRecipe', (pkg) => a.themes.planRecipe(blogPathOf(), pkg));
   handle('plugins:applyRecipe', (pkg) => a.themes.applyRecipe(blogPathOf(), pkg));

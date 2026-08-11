@@ -108,6 +108,43 @@
     </div>
   </div>
 
+  <!-- Hexo 配置编辑系统（交接文档 §2.2 扩展）：左列可编辑配置文件 / 右带行号编辑器＋「查看磁盘原版」对比，保存前自动备份 .bak -->
+  <div id="config-modal" class="modal hidden">
+    <div class="cfgsys-card">
+      <div class="cfgsys-head">
+        <div class="cfgsys-title"><span class="cfgsys-logo">⚙️</span>Hexo 配置编辑系统</div>
+        <button class="cfg-close" id="cfg-close" type="button" title="关闭">&times;</button>
+      </div>
+      <div class="cfgsys-body">
+        <aside class="cfgsys-files">
+          <div class="cfgsys-files-head">可编辑配置文件</div>
+          <div id="cfg-filelist" class="cfg-filelist"></div>
+          <div class="cfgsys-files-foot" id="cfg-path-hint"></div>
+        </aside>
+        <section class="cfgsys-main">
+          <div class="cfg-tabbar">
+            <div class="cfg-curfile-wrap">
+              <span id="cfg-curfile" class="cfg-curfile">—</span>
+              <span class="cfg-dirtydot hidden" id="cfg-dirty" title="有未保存的修改">●</span>
+            </div>
+            <button class="btn ghost cfg-peek-btn" id="cfg-peek" type="button">查看磁盘原版</button>
+          </div>
+          <div class="cfg-editor-wrap">
+            <div id="cfg-peek-pane" class="cfg-peek-pane hidden"><pre id="cfg-readonly" class="cfg-readonly" tabindex="0"></pre></div>
+            <div id="cfg-gutter" class="config-gutter" aria-hidden="true"><div></div></div>
+            <textarea id="cfg-editor" class="config-editor" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+          </div>
+        </section>
+      </div>
+      <p id="cfg-note" class="recipe-note hidden"></p>
+      <div class="config-actions">
+        <button class="btn ghost" id="cfg-restore" type="button">恢复备份</button>
+        <span class="cfg-spacer"></span>
+        <button class="btn" id="cfg-cancel" type="button">取消</button>
+        <button class="btn primary" id="cfg-save" type="button" disabled>保存</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast hidden"></div>
 
   <script src="renderer.js"></script>

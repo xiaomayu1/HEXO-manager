@@ -295,17 +295,24 @@ async function loadPosts() {
       + '<td><strong>' + esc(p.title) + '</strong><div class="muted-row">' + esc(p.source_file || '') + '</div></td>'
       + '<td><span class="badge ' + (p.status === 'published' ? 'ok' : (p.status === 'draft' ? 'warn' : '')) + '">' + esc(statusName[p.status] || p.status) + '</span></td>'
       + '<td>' + fmtTime(p.date) + '</td>'
-      + '<td>' + esc((p.tags || []).join(', ')) + '</td>'
-      + '<td class="row-actions"><button class="btn" data-po="' + p.id + '" data-act="edit">编辑</button><button class="btn danger" data-po="' + p.id + '" data-act="del">删除</button></td>'
+      + '<td>' + esc((p.tags || []).join(', ')) + '</td>'      + '<td class="row-actions"><button class="btn" data-po="' + p.id + '" data-act="edit">编辑</button><button class="btn primary" data-po="' + p.id + '" data-act="publish"' + (p.status === 'published' ? ' disabled title="已发布"' : '') + '>发布</button><button class="btn danger" data-po="' + p.id + '" data-act="del">删除</button></td>'
       + '</tr>').join('') + '</tbody></table>';
   $$('#po-list [data-po]').forEach(b => b.onclick = async () => {
     const id = b.dataset.po;
     if (b.dataset.act === 'del') {
-      const ok = await confirmModal('确认删除该文章吗？（软件库软删除，博客文件需另行清理）', '删除', true);
+      const ok = await confirmModal('确认删除该文章吗？（将软删除软件库记录并删除博客 source 源文件；预览若在运行需重启以更新）', '删除', true);
       if (!ok) return;
       const r2 = await api.invoke('posts:delete', id);
       if (!r2 || !r2.ok) return toast((r2 && r2.error) || '删除失败', 'danger');
-      toast('已删除', 'ok'); loadPosts();
+      toast('已删除' + ((r2 && r2.sync && r2.sync.skipped) ? '（无关联博客文件可清理）' : '，已同步删除博客源文件') + '；预览在运行请重启以更新', 'ok'); loadPosts();    } else if (b.dataset.act === 'publish') {
+      const g = await api.invoke('posts:get', id);
+      if (!g || !g.ok) return toast((g && g.error) || '读取失败', 'danger');
+      const post = g.post;
+      toast('正在发布…');
+      const r2 = await api.invoke('posts:update', id, Object.assign({}, post, { status: 'published' }));
+      if (!r2 || !r2.ok) return toast((r2 && r2.error) || '发布失败', 'danger');
+      toast('已发布' + (r2.sync && r2.sync.skipped ? '' : '，已同步到博客'), 'ok');
+      loadPosts();
     } else {
       const r2 = await api.invoke('posts:get', id);
       if (!r2 || !r2.ok) return toast((r2 && r2.error) || '读取失败', 'danger');
@@ -613,7 +620,7 @@ async function renderThemes() {
     + '<div class="plugin-add"><input id="th-name" placeholder="主题名，如 butterfly（或完整包名 hexo-theme-butterfly）"/><button class="btn primary" id="th-install">安装主题</button></div>'
     + '<div id="th-install-msg" class="status-line"></div>'
     + '<div id="th-list">加载中…</div></div>'
-    + '<div class="section"><div class="section-head"><h2>插件</h2><button class="btn ghost" id="pl-refresh">刷新</button></div>'
+    + '<div class="section"><div class="section-head"><h2>插件</h2><div class="topbar-row"><button class="btn primary" id="cfg-edit-site">📝 配置编辑系统</button><button class="btn ghost" id="pl-refresh">刷新</button></div></div>'
     + '<div class="plugin-add"><input id="pl-name" placeholder="插件名，如 hexo-generator-search"/><button class="btn primary" id="pl-install">安装</button></div>'
     + '<div id="pl-list">加载中…</div></div>';
   // 离开预览页时关闭 F11 劫持
@@ -631,6 +638,7 @@ async function renderThemes() {
     $('#th-name').value = ''; loadThemes();
   };
   $('#pl-refresh').onclick = loadPlugins;
+  $('#cfg-edit-site').onclick = () => openConfigEditor({ which: 'site' });
   $('#pl-install').onclick = async () => {
     const name = $('#pl-name').value.trim();
     if (!name) return toast('请输入插件名称', 'danger');
@@ -683,7 +691,9 @@ async function loadPlugins() {
   if (!r.plugins || !r.plugins.length) { node.innerHTML = '<div class="empty">未发现已安装的 Hexo 插件。可在上方安装 hexo-* 插件。</div>'; return; }
   const catName = { deployer: '部署', generator: '生成', renderer: '渲染', plugin: '功能', other: '其他' };
   const rows = r.plugins.map(p => {
-    const cfg = p.hasRecipe ? '<button class="btn" data-pl="' + esc(p.name) + '" data-act="cfg">配置</button>' : '';
+    const cfg = p.hasRecipe
+      ? '<button class="btn" data-pl="' + esc(p.name) + '" data-act="cfg">配置</button>'
+      : '<button class="btn" data-pl="' + esc(p.name) + '" data-act="edit">编辑配置</button>';
     return '<tr>'
       + '<td><strong>' + esc(p.name) + '</strong></td>'
       + '<td><span class="chip">' + esc(catName[p.category] || p.category || '插件') + '</span></td>'
@@ -694,6 +704,7 @@ async function loadPlugins() {
   $$('#pl-list [data-pl]').forEach(b => b.onclick = async () => {
     const name = b.dataset.pl, act = b.dataset.act;
     if (act === 'cfg') return openRecipePreview(name);
+    if (act === 'edit') return openConfigEditor({ which: 'site', focusPlugin: name });
     const ok = await confirmModal('确认卸载插件 ' + name + ' 吗？', '卸载', true);
     if (!ok) return;
     toast('正在卸载…');
@@ -704,7 +715,7 @@ async function loadPlugins() {
 }
 
 // 配方预览→确认→应用：plugins:previewRecipe 出「将做的事」，确认后 plugins:applyRecipe 写盘。
-// 未收录插件不显示「配置」按钮——后续可接通用编辑器（交接文档 §2.2）。
+// 未收录插件改由「编辑配置」按钮进入通用编辑器（见 openConfigEditor，交接文档 §2.2）。
 async function openRecipePreview(pkg) {
   toast('正在生成配方预览…');
   const pv = await api.invoke('plugins:previewRecipe', pkg);
@@ -728,6 +739,207 @@ async function openRecipePreview(pkg) {
   else toast('无需写入（配置已存在或均为冲突）', '');
   loadPlugins();
 }
+// ===== Hexo 配置编辑系统（交接文档 §2.2 扩展）=====
+// 一个弹窗管理博客根下所有可编辑 _config*.yml：左列选文件，右带行号编辑器；
+// 「查看磁盘原版」覆盖只读高亮版用于对比；保存前自动备份 .bak；「恢复备份」仅把最近
+// 一次 .bak 读回右侧供核对、绝不自动覆盖原文件（安全红线 §四）。
+// options: { which?: 'site' | 'theme', focusPlugin?: string }
+function openConfigEditor(options) {
+  options = options || {};
+  const modal = $('#config-modal');
+  if (!modal) return;
+  let activeFile = null;       // 当前编辑的文件名（blog 根下）
+  let diskText = '';          // 当前文件磁盘上的原始内容（做脏标记 + 重新高亮用）
+  let busy = false;           // 进行异步读写时锁按钮
+  let peekOn = false;
+
+  const elFilelist = $('#cfg-filelist');
+  const elCur = $('#cfg-curfile');
+  const elDirty = $('#cfg-dirty');
+  const elPeek = $('#cfg-peek');
+  const elPeekPane = $('#cfg-peek-pane');
+  const elReadonly = $('#cfg-readonly');
+  const ta = $('#cfg-editor');
+  const elGutter = $('#cfg-gutter');
+  const gutterInner = elGutter && elGutter.firstChild;
+  const elNote = $('#cfg-note');
+  const btnSave = $('#cfg-save');
+  const btnRestore = $('#cfg-restore');
+  const btnClose = $('#cfg-close');
+  const btnCancel = $('#cfg-cancel');
+  const elPathHint = $('#cfg-path-hint');
+
+  function esc1(v) { return v == null ? '' : String(v); }
+
+  function setNote(text) {
+    if (!elNote) return;
+    if (!text) { elNote.classList.add('hidden'); elNote.textContent = ''; }
+    else { elNote.classList.remove('hidden'); elNote.textContent = text; }
+  }
+  function leafOf(fp) {
+    if (!fp) return '';
+    const parts = String(fp).split(/[\\\/]/);
+    return parts[parts.length - 1] || '';
+  }
+  function setBusy(on) {
+    busy = on;
+    if (btnSave) btnSave.disabled = busy;
+    if (btnRestore) btnRestore.disabled = busy;
+  }
+  function updateDirty() {
+    const dirty = ta.value !== diskText;
+    if (elDirty) { if (dirty) elDirty.classList.remove('hidden'); else elDirty.classList.add('hidden'); }
+    if (btnSave && !busy) btnSave.disabled = !dirty;
+  }
+  function renderGutter() {
+    if (!gutterInner) return;
+    const n = String(ta.value).split(/\n/).length;
+    let rows = '';
+    for (let i = 1; i <= n; i++) rows = rows + (i === 1 ? '' : '\n') + i;
+    gutterInner.textContent = rows;
+  }
+  function syncGutterScroll() {
+    if (!gutterInner) return;
+    gutterInner.style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
+  }
+  async function renderReadonly() {
+    const text = diskText || '';
+    if (elReadonly) elReadonly.textContent = text;
+    const r = await api.invoke('config:highlight', text);
+    if (r && r.ok && elReadonly && elPeekPane && !elPeekPane.classList.contains('hidden')) elReadonly.innerHTML = r.html;
+    else if (r && r.ok && elReadonly) elReadonly.innerHTML = r.html;
+  }
+  function setPeek(on) {
+    peekOn = on;
+    if (on) {
+      renderReadonly();
+      if (elPeekPane) elPeekPane.classList.remove('hidden');
+      if (elPeek) { elPeek.classList.add('on'); elPeek.textContent = '隐藏原版'; }
+    } else {
+      if (elPeekPane) elPeekPane.classList.add('hidden');
+      if (elPeek) { elPeek.classList.remove('on'); elPeek.textContent = '查看磁盘原版'; }
+    }
+  }
+  function setActiveItem(name) {
+    if (!elFilelist) return;
+    elFilelist.querySelectorAll('.cfg-file-item').forEach(n => {
+      if (n.dataset.file === name) { n.classList.add('active'); }
+      else { n.classList.remove('active'); }
+    });
+  }
+  async function loadFile(name) {
+    if (busy) return;
+    if (!name) return;
+    setBusy(true);
+    setNote('正在读取 ' + name + ' …');
+    let r;
+    try { r = await api.invoke('config:read', name); }
+    catch (e) { r = { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+    if (!r || !r.ok) {
+      setBusy(false);
+      setNote(esc1(r && r.error) ? ('读取失败：' + r.error) : '');
+      toast(esc1(r && r.error) ? r.error : '读取失败', 'danger');
+      return;
+    }
+    activeFile = name;
+    if (r.seeded) { diskText = ''; ta.value = r.text || ''; }   // 磁盘实为 0 字节空文件，回填的主题自带配置显示为未保存草稿，可一键保存写入
+    else { diskText = r.text || ''; ta.value = diskText; }
+    if (elCur) elCur.textContent = name;
+    setActiveItem(name);
+    setPeek(false);
+    renderGutter();
+    ta.scrollTop = 0;
+    syncGutterScroll();
+    renderReadonly();
+    updateDirty();
+    setBusy(false);
+    setNote(r.note || '保存前会自动备份原文件为 .bak；「恢复备份」载入最近一次备份供核对（不覆盖原文件）。');
+  }
+  async function save() {
+    if (busy || !activeFile) return;
+    const text = ta.value;
+    setBusy(true);
+    setNote('正在保存 ' + activeFile + ' …');
+    let r;
+    try { r = await api.invoke('config:write', text, activeFile); }
+    catch (e) { r = { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+    setBusy(false);
+    if (!r || !r.ok) {
+      setNote(esc1(r && r.error) ? ('保存失败：' + r.error) : '');
+      toast(esc1(r && r.error) ? r.error : '保存失败', 'danger');
+      return;
+    }
+    diskText = text;
+    renderReadonly();
+    updateDirty();
+    setNote('已保存 ' + activeFile + '（原文件备份为 ' + leafOf(r.backup) + '）');
+    toast('已保存，已自动备份 .bak', 'ok');
+  }
+  async function restore() {
+    if (busy || !activeFile) return;
+    setBusy(true);
+    let r;
+    try { r = await api.invoke('config:readBackup', activeFile); }
+    catch (e) { r = { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+    setBusy(false);
+    if (r && r.ok) {
+      ta.value = r.text || '';
+      setPeek(false);
+      renderGutter();
+      syncGutterScroll();
+      updateDirty();
+      setNote('已载入最近一次备份供核对：' + leafOf(r.backup) + '。确认无误点「保存」即写入磁盘（写前再备份一次）。');
+      toast('已载入备份，请核对后保存', '');
+    } else {
+      const err = esc1(r && r.error) || '暂无备份可恢复';
+      toast(err, 'danger');
+      setNote(activeFile + '：暂无备份文件可恢复（首次保存过才会生成 .bak）');
+    }
+  }
+  function close() { modal.classList.add('hidden'); }
+
+  async function init() {
+    const lr = await api.invoke('config:list');
+    if (!lr || !lr.ok) {
+      toast(esc1(lr && lr.error) ? lr.error : '读取配置文件清单失败，请先在「设置」配置博客本地路径', 'danger');
+      return;
+    }
+    const files = (lr.files && lr.files.length) ? lr.files : [];
+    if (!files.length) { toast('未发现可编辑的配置文件', 'danger'); return; }
+    if (elFilelist) {
+      elFilelist.innerHTML = files.map(function (f) {
+        const badge = '<span class="fbadge kind-' + esc(f.kind) + '">' + esc(f.kind === 'site' ? '站点' : (f.kind === 'theme' ? '当前主题' : (f.kind === 'theme-other' ? '主题' : '其他'))) + '</span>';
+        return '<div class="cfg-file-item" data-file="' + esc(f.name) + '" title="' + esc(f.name) + '">'
+          + '<span class="fname">' + esc(f.name) + '</span>'
+          + '<span class="flabel">' + esc(f.label) + '</span>'
+          + badge + '</div>';
+      }).join('');
+      elFilelist.querySelectorAll('.cfg-file-item').forEach(function (n) {
+        n.onclick = function () { if (n.dataset.file !== activeFile) loadFile(n.dataset.file); };
+      });
+    }
+    if (elPathHint) {
+      const b = await api.invoke('settings:blogConfig');
+      if (b && b.ok && b.blogPath) elPathHint.innerHTML = '<b>博客根</b><br>' + esc(b.blogPath);
+      else elPathHint.textContent = '未配置博客本地路径';
+    }
+    if (btnCancel) btnCancel.onclick = close;
+    if (btnClose) btnClose.onclick = close;
+    if (btnSave) btnSave.onclick = save;
+    if (btnRestore) btnRestore.onclick = restore;
+    if (elPeek) elPeek.onclick = function () { setPeek(!peekOn); };
+    if (ta) { ta.oninput = function () { renderGutter(); updateDirty(); }; ta.onscroll = syncGutterScroll; }
+    let initial = '_config.yml';
+    if (options.which === 'theme') { const t = files.find(function (f) { return f.kind === 'theme'; }); if (t) initial = t.name; }
+    const found = files.find(function (f) { return f.name === initial; });
+    await loadFile((found ? found.name : files[0].name));
+    if (options.focusPlugin) setNote('插件「' + options.focusPlugin + '」无内置配方，请在右侧手动追加其配置段（保存会自动备份 ' + esc(activeFile) + '）');
+    modal.classList.remove('hidden');
+    try { ta.focus(); } catch (e) {}
+  }
+  init();
+}
+
 // ===== deploy =====
 async function renderDeploy() {
   const [cfg, hist] = await Promise.all([api.invoke('deploy:getConfig'), api.invoke('deploy:history', 20)]);

@@ -166,3 +166,161 @@ describe('themes service', () => {
     expect(() => svc.installPlugin('B', '')).toThrow(/插件名称/);
   });
 });
+
+describe('themes: theme config + backup', () => {
+  test('writeThemeConfig writes _config.<theme>.yml and returns the theme', () => {
+    const fs = makeFakeFs({ 'B/_config.yml': 'theme: next\nsite: x\n' });
+    const svc = createThemesService({ fs });
+    const r = svc.writeThemeConfig('B', 'inject:\n  head: []\n');
+    expect(r.ok).toBe(true);
+    expect(r.theme).toBe('next');
+    expect(r.backup).toBe(null);
+    expect(fs.readFileSync('B/_config.next.yml')).toBe('inject:\n  head: []\n');
+    expect(fs.readFileSync('B/_config.yml')).toBe('theme: next\nsite: x\n');
+  });
+
+  test('writeThemeConfig backs up an existing theme config before overwriting', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'theme: next\n',
+      'B/_config.next.yml': 'old: v\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.writeThemeConfig('B', 'new: v\n');
+    expect(r.ok).toBe(true);
+    expect(r.backup).not.toBe(null);
+    expect(String(r.backup).indexOf('_config.next.yml.bak')).toBeGreaterThanOrEqual(0);
+    expect(fs.readFileSync('B/_config.next.yml')).toBe('new: v\n');
+    expect(fs.readFileSync('B/_config.next.yml.bak')).toBe('old: v\n');
+  });
+
+  test('writeThemeConfig refuses when there is no active theme', () => {
+    const fs = makeFakeFs({ 'B/_config.yml': 'site: x\n' });
+    const svc = createThemesService({ fs });
+    const r = svc.writeThemeConfig('B', 'x: 1\n');
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/主题/);
+  });
+
+  test('readConfigBackup returns ok:false when no backup exists', () => {
+    const fs = makeFakeFs({ 'B/_config.yml': 'theme: next\nsite: x\n' });
+    const svc = createThemesService({ fs });
+    const r = svc.readConfigBackup('B', 'site');
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/备份/);
+  });
+
+  test('readConfigBackup returns the newest (highest numbered) site backup', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'cur\n',
+      'B/_config.yml.bak': 'orig\n',
+      'B/_config.yml.bak.2': 'second\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.readConfigBackup('B', 'site');
+    expect(r.ok).toBe(true);
+    expect(r.text).toBe('second\n');
+    expect(String(r.backup).indexOf('_config.yml.bak.2')).toBeGreaterThanOrEqual(0);
+  });
+
+  test('readConfigBackup reads the theme config backup when which=theme', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'theme: next\n',
+      'B/_config.next.yml': 'cur\n',
+      'B/_config.next.yml.bak': 'prev\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.readConfigBackup('B', 'theme');
+    expect(r.ok).toBe(true);
+    expect(r.text).toBe('prev\n');
+    expect(String(r.backup).indexOf('_config.next.yml.bak')).toBeGreaterThanOrEqual(0);
+  });
+
+  test('readConfigBackup theme fails when no active theme is set', () => {
+    const fs = makeFakeFs({ 'B/_config.yml': 'site: x\n' });
+    const svc = createThemesService({ fs });
+    const r = svc.readConfigBackup('B', 'theme');
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/主题/);
+  });
+});
+
+describe('themes: config file list + backup by name', () => {
+  test('listBlogConfigFiles lists _config.yml plus theme configs, marks the active theme', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'theme: butterfly\nsite: x\n',
+      'B/_config.butterfly.yml': 'inject:\n  head: []\n',
+      'B/_config.next.yml': 'inject:\n  head: []\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.listBlogConfigFiles('B');
+    expect(r.ok).toBe(true);
+    expect(r.activeTheme).toBe('butterfly');
+    expect(r.files.map(f => f.name)).toEqual(['_config.yml', '_config.butterfly.yml', '_config.next.yml']);
+    expect(r.files[0]).toMatchObject({ name: '_config.yml', kind: 'site', active: true });
+    const bf = r.files.find(f => f.name === '_config.butterfly.yml');
+    expect(bf.kind).toBe('theme');
+    expect(bf.label).toMatch(/当前/);
+    expect(bf.active).toBe(true);
+    expect(r.files.find(f => f.name === '_config.next.yml').kind).toBe('theme-other');
+  });
+
+  test('listBlogConfigFiles still lists other cfg files when _config.yml is absent', () => {
+    const fs = makeFakeFs({ 'B/_config.butterfly.yml': 'inject: x\n' });
+    const svc = createThemesService({ fs });
+    const r = svc.listBlogConfigFiles('B');
+    expect(r.ok).toBe(true);
+    expect(r.files).toHaveLength(1);
+    expect(r.files[0].name).toBe('_config.butterfly.yml');
+    expect(r.files[0].active).toBe(false);
+  });
+
+  test('listBlogConfigFiles ignores non-_config yaml and markdown files', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'theme: x\nsite: y\n',
+      'B/themes.yml': 'a: 1\n',
+      'B/random.md': 'a: 1\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.listBlogConfigFiles('B');
+    expect(r.files.map(f => f.name)).toEqual(['_config.yml']);
+  });
+
+  test('readConfigBackup accepts a direct config file name', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'cur\n',
+      'B/_config.yml.bak': 'orig\n',
+      'B/_config.butterfly.yml': 'cur-t\n',
+      'B/_config.butterfly.yml.bak': 'orig-t\n'
+    });
+    const svc = createThemesService({ fs });
+    const r = svc.readConfigBackup('B', '_config.butterfly.yml');
+    expect(r.ok).toBe(true);
+    expect(r.text).toBe('orig-t\n');
+    expect(String(r.backup).indexOf('_config.butterfly.yml.bak')).toBeGreaterThanOrEqual(0);
+  });
+
+  test('readConfigBackup site/theme back-compat still works', () => {
+    const fs = makeFakeFs({
+      'B/_config.yml': 'theme: next\ncur\n',
+      'B/_config.yml.bak': 'orig\n',
+      'B/_config.next.yml': 'cur-t\n',
+      'B/_config.next.yml.bak': 'orig-t\n'
+    });
+    const svc = createThemesService({ fs });
+    expect(svc.readConfigBackup('B', 'site').text).toBe('orig\n');
+    expect(svc.readConfigBackup('B', 'theme').text).toBe('orig-t\n');
+  });
+});
+
+describe('themes: service exposes per-file config helpers used by IPC', () => {
+  test('createThemesService returns readBlogConfigFile / writeBlogConfigFile', () => {
+    const fs = makeFakeFs({ 'B/_config.yml': 'theme: next\n', 'B/_config.butterfly.yml': 'inject:\n  head: []\n' });
+    const svc = createThemesService({ fs });
+    expect(typeof svc.readBlogConfigFile).toBe('function');
+    expect(typeof svc.writeBlogConfigFile).toBe('function');
+    expect(svc.readBlogConfigFile('B', '_config.butterfly.yml')).toBe('inject:\n  head: []\n');
+    const r = svc.writeBlogConfigFile('B', '_config.butterfly.yml', 'inject:\n  head: ["a"]\n');
+    expect(r.ok).toBe(true);
+    expect(fs.readFileSync('B/_config.butterfly.yml')).toBe('inject:\n  head: ["a"]\n');
+  });
+});

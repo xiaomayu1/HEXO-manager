@@ -444,6 +444,78 @@ function createThemesService(opts) {
     catch (e) { return { ok: false, error: '主题配置文件不存在：_config.' + theme + '.yml' }; }
   }
 
+  function writeThemeConfig(blogPath, content) {
+    requireBlogPath(blogPath);
+    const cfg = fsx.readFileSync(path.join(blogPath, '_config.yml'), 'utf8');
+    const theme = parseActiveTheme(cfg);
+    if (!theme) return { ok: false, error: '尚未在 _config.yml 配置主题，无法写入主题配置' };
+    const r = writeBlogConfigFile(blogPath, '_config.' + theme + '.yml', content);
+    return { ok: true, backup: r.backup, theme: theme };
+  }
+
+  // 读取某配置文件的「最近一次备份」用于在通用编辑器里「恢复备份」回看核对。
+  // which='site' → _config.yml；which='theme' → _config.<activeTheme>.yml。
+  // 备份为增量 .bak/.bak.2/.bak.3…（见 backupFileIfExists），序号最大者即最近一次写盘前的快照；
+  // 只把内容读回给用户核对，绝不自动覆盖原文件（安全红线 §四）。
+  function readConfigBackup(blogPath, which) {
+    requireBlogPath(blogPath);
+    let fileName = '_config.yml';
+    if (which && which !== 'site') {
+      if (which === 'theme') {
+        const cfg = fsx.readFileSync(path.join(blogPath, '_config.yml'), 'utf8');
+        const theme = parseActiveTheme(cfg);
+        if (!theme) return { ok: false, error: '尚未在 _config.yml 配置主题，无法读取主题备份' };
+        fileName = '_config.' + theme + '.yml';
+      } else {
+        fileName = String(which);
+      }
+    }
+    const base = path.join(blogPath, fileName);
+    let latest = null;
+    let cand = base + '.bak';
+    let i = 2;
+    while (fileExistsRaw(fsx, cand) && i < 10000) {
+      latest = { text: fsx.readFileSync(cand, 'utf8'), backup: cand };
+      cand = base + '.bak.' + i;
+      i++;
+    }
+    if (!latest) return { ok: false, error: '暂无备份可恢复' };
+    return { ok: true, text: latest.text, backup: latest.backup };
+  }
+
+  // 把博客根目录下可由「通用编辑系统」管理的配置文件打成清单：_config.yml + 所有 _config.<x>.yml
+  // （以及其他 _config 开头的 yaml，兜底）。只列已存在的真实文件，绝不主动创建。
+  // kind: 'site' | 'theme'(当前主题配置) | 'theme-other'(非活动主题配置) | 'other'（都不写主题模板源码，安全红线 §四）。
+  function listBlogConfigFiles(blogPath) {
+    requireBlogPath(blogPath);
+    let activeTheme = '';
+    try { activeTheme = parseActiveTheme(fsx.readFileSync(path.join(blogPath, '_config.yml'), 'utf8')) || ''; } catch (e) {}
+    let entries = [];
+    try { entries = fsx.readdirSync(blogPath); } catch (e) { entries = []; }
+    const cfgRe = /^_config.*\.ya?ml$/i;
+    const seen = {};
+    const files = [];
+    if (fileExistsRaw(fsx, path.join(blogPath, '_config.yml'))) {
+      files.push({ name: '_config.yml', label: '站点配置', kind: 'site', active: true });
+      seen['_config.yml'] = true;
+    }
+    const sorted = entries.slice().sort();
+    for (let k = 0; k < sorted.length; k++) {
+      const base = String(sorted[k]).split(/[\\/]/).pop();
+      if (!cfgRe.test(base) || seen[base]) continue;
+      seen[base] = true;
+      const m = /^_config\.(.+)\.ya?ml$/i.exec(base);
+      let kind = 'other', label = base;
+      if (m) {
+        const t = m[1];
+        kind = (t === activeTheme) ? 'theme' : 'theme-other';
+        label = (t === activeTheme) ? ('主题配置 · ' + t + ' · 当前') : ('主题配置 · ' + t);
+      }
+      files.push({ name: base, label: label, kind: kind, active: kind === 'theme' });
+    }
+    return { ok: true, files: files, activeTheme: activeTheme };
+  }
+
   // 计算「配方」的预演：会写入什么、跳过什么、哪些文件已存在（冲突，绝不覆盖）。
   function computeRecipePlan(blogPath, pkg) {
     requireBlogPath(blogPath);
@@ -607,7 +679,7 @@ function createThemesService(opts) {
   }
 
   return { listThemes, activateTheme, listPlugins, installPlugin, installTheme, uninstallPlugin,
-           readBlogConfig, writeBlogConfig, readThemeConfig, planRecipe, applyRecipe };
+           readBlogConfig, writeBlogConfig, readBlogConfigFile, writeBlogConfigFile, readThemeConfig, writeThemeConfig, readConfigBackup, listBlogConfigFiles, planRecipe, applyRecipe };
 }
 
 module.exports = {
