@@ -19,11 +19,11 @@ ffmpeg.dll filter=lfs diff=lfs merge=lfs -text
 icudtl.dat filter=lfs diff=lfs merge=lfs -text
 locales filter=lfs diff=lfs merge=lfs -text
 # Electron build output
-*.exe
-*.dll
-*.pak
-*.dat
-*.bin
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.pak filter=lfs diff=lfs merge=lfs -text
+*.dat filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
 resources.pak
 snapshot_blob.bin
 v8_context_snapshot.bin
