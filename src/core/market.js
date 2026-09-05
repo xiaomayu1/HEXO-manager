@@ -495,7 +495,7 @@ function createMarketService(opts) {
     const detail = await getPackageDetails(name);
     if (!detail.ok) return { ok: false, error: detail.error };
 
-    const actualVersion = (version === 'latest' ? (detail.distTags?.latest || version) : version);
+    const actualVersion = (!version || version === 'latest' ? (detail.distTags?.latest || Object.keys(detail.versions || {})[0] || 'latest') : version);
     const destPath = path.join(destDir, `${name}-${actualVersion}.tgz`);
 
     // Build tarball URLs to try in order
