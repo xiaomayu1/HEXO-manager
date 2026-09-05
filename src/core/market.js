@@ -498,17 +498,22 @@ function createMarketService(opts) {
     const actualVersion = (version === 'latest' ? (detail.distTags?.latest || version) : version);
     const destPath = path.join(destDir, `${name}-${actualVersion}.tgz`);
 
-    // Use the tarball URL directly from the API response when available
-    const tgzUrl = (detail.versions && detail.versions[actualVersion] && detail.versions[actualVersion].tarball)
-      || registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz';
-    const mirrorTgzUrl = mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz';
+    // Build tarball URLs to try in order
+    const tarballUrl = detail.versions?.[actualVersion]?.tarball || '';
+    const urls = [
+      tarballUrl,
+      registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz',
+      mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz',
+      'https://cdn.npm.taobao.org/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz'
+    ].filter(u => u);
 
-    // 优先尝试官方源，失败再尝试镜像（镜像有时返回 302 导致下载失败）
-    let r = await downloadStream(tgzUrl, destPath, onProgress);
-    if (!r.ok) {
-      r = await downloadStream(mirrorTgzUrl, destPath, onProgress);
-      if (!r.ok) return { ok: false, error: `下载失败（官方源和镜像均不可用：${r.error}）` };
+    // Try each URL until one succeeds
+    let r = null;
+    for (const url of urls) {
+      r = await downloadStream(url, destPath, onProgress);
+      if (r.ok) break;
     }
+    if (!r || !r.ok) return { ok: false, error: `下载失败（所有源均不可用）` };
     return r;
   }
 
