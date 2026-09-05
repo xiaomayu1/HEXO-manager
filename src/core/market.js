@@ -501,7 +501,7 @@ function createMarketService(opts) {
     // Use the tarball URL directly from the API response when available
     const tgzUrl = (detail.versions && detail.versions[actualVersion] && detail.versions[actualVersion].tarball)
       || registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz';
-    const mirrorTgzUrl = mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + version + '.tgz';
+    const mirrorTgzUrl = mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz';
 
     // 优先尝试官方源，失败再尝试镜像（镜像有时返回 302 导致下载失败）
     let r = await downloadStream(tgzUrl, destPath, onProgress);
