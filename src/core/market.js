@@ -502,10 +502,11 @@ function createMarketService(opts) {
       || registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + version + '.tgz';
     const mirrorTgzUrl = mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + version + '.tgz';
 
-    let r = await downloadStream(mirrorTgzUrl, destPath, onProgress);
+    // 优先尝试官方源，失败再尝试镜像（镜像有时返回 302 导致下载失败）
+    let r = await downloadStream(tgzUrl, destPath, onProgress);
     if (!r.ok) {
-      r = await downloadStream(tgzUrl, destPath, onProgress);
-      if (!r.ok) return { ok: false, error: `下载失败（镜像和官方源均不可用：${r.error}）` };
+      r = await downloadStream(mirrorTgzUrl, destPath, onProgress);
+      if (!r.ok) return { ok: false, error: `下载失败（官方源和镜像均不可用：${r.error}）` };
     }
     return r;
   }

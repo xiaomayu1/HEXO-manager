@@ -225,7 +225,7 @@ function navigate(route) {
   });
   const map = {
     dashboard: renderDashboard, posts: renderPosts, tags: renderTagsCategories,
-    preview: renderPreview, themes: renderThemes, pages: renderPages, deploy: renderDeploy, settings: renderSettings, profile: renderProfile, media: renderMedia, notices: renderNotices, market: renderMarket
+    preview: renderPreview, themes: renderThemes, pages: renderPages, deploy: renderDeploy, settings: renderSettings, profile: renderProfile, media: renderMedia, notices: renderNotices
   };
   (map[state.route] || renderDashboard)().catch(err => {
     console.error('[navigate] render error for', state.route, err);
