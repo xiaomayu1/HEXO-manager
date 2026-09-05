@@ -795,7 +795,27 @@ function createThemesService(opts) {
     if (!fs.existsSync(themeDir)) {
       return { ok: false, error: '主题目录不存在：' + name };
     }
-    fs.rmSync(themeDir, { recursive: true, force: true });
+    try {
+      // First try recursive remove
+      fs.rmSync(themeDir, { recursive: true, force: true });
+    } catch (e) {
+      // Fallback: manually delete contents then directory
+      try {
+        const items = fs.readdirSync(themeDir);
+        for (const item of items) {
+          const itemPath = path.join(themeDir, item);
+          const stat = fs.statSync(itemPath);
+          if (stat.isDirectory()) {
+            fs.rmSync(itemPath, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(itemPath);
+          }
+        }
+        fs.rmdirSync(themeDir);
+      } catch (_) {
+        return { ok: false, error: '删除失败，可能有文件被占用：' + name };
+      }
+    }
     return { ok: true, name };
   }
 
