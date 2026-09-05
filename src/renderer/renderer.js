@@ -2031,7 +2031,7 @@ async function loadRecommendedThemes() {
         </div>
       </div>
       <div class="market-rec-actions">
-        <button class="btn primary btn-sm" data-mr-install="${esc(t.name)}">安装</button>
+        <button class="btn primary btn-sm" data-mr-install="${esc('hexo-theme-' + t.name)}">安装</button>
         <button class="btn btn-sm" data-mr-repo="${esc(t.repo)}">GitHub</button>
       </div>
     </div>`).join('') + '</div>';
