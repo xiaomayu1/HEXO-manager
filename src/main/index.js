@@ -6,20 +6,49 @@ const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const { createApp } = require('../core/app');
 const { parseFrontMatter } = require('../core/scanner');
-const { recipeFor } = require('../core/pluginRecipes');
+const { recipeFor, listRecipePackages } = require('../core/pluginRecipes');
 const { highlightYaml } = require('../core/yamlHighlight');
 
 const sync = { slugify: require('../core/syncHexo').slugify, writePostFile: require('../core/syncHexo').writePostFile, deletePostFile: require('../core/syncHexo').deletePostFile };
 
+// 简单 HTML 转义，用于 data URL 中的 title 属性
+function esc(s) { return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
 let win = null;
+let previewWin = null;          // Markdown 预览独立窗口
 let backend = null;
 let previewF11Hook = false;     // 由渲染器经 preview:setF11Hook 开关；仅在预览页劫持 F11
+let oAuthWin = null;            // OAuth 授权窗口（隐藏，等待回调）
+let oAuthResolver = null;       // 当前待 resolve 的 OAuth 回调 Promise
 
 // ensure the backend is cleanly shut down (database closed) before the app quits.
 function shutdownBackend() {
   if (!backend) return;
   try { backend.close(); } catch (_) {}
   backend = null;
+}
+// 关闭 Markdown 预览窗口
+function closePreviewWin() {
+  if (previewWin) { previewWin.close(); previewWin = null; }
+}
+// 关闭 OAuth 授权窗口
+function closeOAuthWin() {
+  if (oAuthWin && !oAuthWin.closed) { oAuthWin.close(); }
+  oAuthWin = null;
+}
+// 处理自定义协议回调 hexostudio://oauth/callback?...
+function handleOAuthCallback(url) {
+  const info = parseOAuthCallback(url);
+  if (!info) return;
+  // Close the OAuth window since callback came through protocol
+  closeOAuthWin();
+  if (info.error) {
+    if (win) win.webContents.send('oauth:error', info.error);
+    return;
+  }
+  if (info.code && win) {
+    win.webContents.send('oauth:callback', { code: info.code, state: info.state });
+  }
 }
 
 function dbPath() {
@@ -46,6 +75,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#ffffff',
     title: 'Hexo 博客管家',
+    icon: path.join(__dirname, '..', 'renderer', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -55,6 +85,14 @@ function createWindow() {
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.on('closed', () => { win = null; });
+  // 接入预览日志转发：当 win 就绪后将 onLog 回调绑定到 webContents.send
+  if (backend && backend.preview && typeof backend.preview.setOnLog === 'function') {
+    backend.preview.setOnLog((msg) => {
+      if (win && win.webContents && msg && typeof msg === 'object' && msg.msg) {
+        win.webContents.send('preview:log', msg);
+      }
+    });
+  }
   // webContents 级按键拦截：iframe 获得焦点后外层 document 收不到键盘事件，
   // 这里在分发前捕获，仅当渲染器开启劫持时拦 F11，转发给渲染器切换预览全屏。
   win.webContents.on('before-input-event', (event, input) => {
@@ -63,6 +101,38 @@ function createWindow() {
       win.webContents.send('preview:f11');
     }
   });
+}
+
+// OAuth: open authorize URL in a hidden BrowserWindow, receive callback via custom protocol
+function openOAuthWindow(authorizeUrl, callback) {
+  const oauthWin = new BrowserWindow({
+    width: 480, height: 640,
+    title: 'OAuth 登录',
+    modal: !!win,
+    parent: win,
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  oauthWin.loadURL(authorizeUrl);
+  oauthWin.once('close', () => {
+    // If window closed without callback, reject
+    setTimeout(() => { if (!oauthWin.closed) callback(null); }, 2000);
+  });
+  return oauthWin;
+}
+
+// Parse hexostudio://oauth/callback?code=...&state=... from argv or open-url event
+function parseOAuthCallback(url) {
+  if (!url || !url.startsWith('hexostudio://')) return null;
+  try {
+    const u = new URL(url);
+    if (u.pathname !== '/oauth/callback') return null;
+    return {
+      code: u.searchParams.get('code'),
+      state: u.searchParams.get('state'),
+      error: u.searchParams.get('error')
+    };
+  } catch (_) { return null; }
 }
 
 // -- IPC wiring: delegate every request to the tested backend services --
@@ -87,6 +157,95 @@ function registerIpc() {
   handle('auth:updateProfile', (i) => ({ ok: true, profile: a.auth.updateProfile(i) }));
   handle('auth:changePassword', (i) => { a.auth.changePassword(i); return { ok: true }; });
 
+  // -- OAuth: third-party account binding --
+  handle('auth:getAuthorizeUrl', (provider) => {
+    try {
+      const url = a.auth.getAuthorizeUrl(String(provider || ''), crypto.randomUUID());
+      return { ok: true, url };
+    } catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  handle('auth:oAuthStart', async (provider) => {
+    try {
+      const url = a.auth.getAuthorizeUrl(String(provider || ''), crypto.randomUUID());
+      // Open the authorize URL in a hidden window that will receive the callback
+      const win2 = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true } });
+      win2.loadURL(url);
+      oAuthWin = win2;
+      // Return the URL so renderer can show a loading indicator
+      return { ok: true, url };
+    } catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  handle('auth:oAuthCallback', (input) => {
+    // Called when custom protocol fires with hexostudio://oauth/callback?...
+    const info = parseOAuthCallback(String(input || ''));
+    if (!info) return { ok: false, error: '无效的 OAuth 回调地址' };
+    if (info.error) return { ok: false, error: '授权失败: ' + (info.error_description || info.error) };
+    if (!info.code) return { ok: false, error: '未收到授权码' };
+    // Send code to renderer for exchange
+    if (win) win.webContents.send('oauth:callback', { code: info.code, state: info.state });
+    return { ok: true };
+  });
+  handle('auth:exchangeOAuthCode', async (input) => {
+    const i = input || {};
+    const provider = String(i.provider || '').toLowerCase();
+    const code = String(i.code || '');
+    if (!code) return { ok: false, error: '未收到授权码' };
+    try {
+      const cfg = a.auth.getOAuthConfig(provider);
+      const clientId = (opts && opts.oauth && opts.oauth[provider] && opts.oauth[provider].clientId) || '';
+      const clientSecret = (opts && opts.oauth && opts.oauth[provider] && opts.oauth[provider].clientSecret) || '';
+      if (!clientId) return { ok: false, error: '未配置 ' + provider + ' 的 Client ID，请在「设置」中配置' };
+      // Exchange code for token via POST
+      const form = new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: (opts && opts.oauthRedirectUri) || 'hexostudio://oauth/callback',
+        client_id: clientId,
+        client_secret: clientSecret
+      });
+      const tokenRes = await fetch(cfg.tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+        body: form.toString()
+      });
+      if (!tokenRes.ok) return { ok: false, error: '授权码兑换失败，请重试' };
+      const tokenData = await tokenRes.json();
+      if (tokenData.error) return { ok: false, error: tokenData.error_description || tokenData.error };
+      // Fetch user info from provider
+      const userInfoRes = await fetch(cfg.userInfoUrl, {
+        headers: { 'Authorization': 'Bearer ' + tokenData.access_token }
+      });
+      if (!userInfoRes.ok) return { ok: false, error: '获取用户信息失败' };
+      const userInfo = await userInfoRes.json();
+      const providerUserId = String(userInfo.id || userInfo.login || userInfo.username || '');
+      if (!providerUserId) return { ok: false, error: '无法获取第三方用户 ID' };
+      // Link / auto-login
+      const linked = a.auth.linkAccount({
+        provider, access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || '',
+        provider_user_id: providerUserId,
+        expires_in: tokenData.expires_in || null
+      });
+      // Find or create local user account
+      const existing = a.auth.findByProviderUser(provider, providerUserId);
+      if (existing) {
+        a.auth.session.set({ id: existing.id, username: existing.username });
+        return { ok: true, user: a.auth.currentUser(), linked, autoCreated: false };
+      }
+      // Auto-create local account (username = provider_user_id)
+      const newUser = a.auth.register({ username: providerUserId, password: 'oauth-' + providerUserId, confirm: 'oauth-' + providerUserId });
+      a.auth.session.set({ id: newUser.id, username: newUser.username });
+      return { ok: true, user: a.auth.currentUser(), linked, autoCreated: true };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  });
+  handle('auth:listLinkedAccounts', () => ({ ok: true, accounts: a.auth.listLinkedAccounts() }));
+  handle('auth:unlinkAccount', (provider) => {
+    try { a.auth.unlinkAccount(String(provider || '')); return { ok: true }; }
+    catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  handle('auth:isLinked', (provider) => ({ ok: true, linked: a.auth.isLinked(String(provider || '')) }));
   handle('posts:create', (i) => {
     const post = a.posts.createPost(i);
     return { ok: true, post: post, sync: syncHexoWrite(post) };
@@ -128,6 +287,8 @@ function registerIpc() {
   handle('posts:list', () => ({ ok: true, posts: a.posts.listPosts() }));
   handle('posts:search', (q) => ({ ok: true, posts: a.posts.searchPosts(q) }));
   handle('posts:filterByStatus', (s) => ({ ok: true, posts: a.posts.filterByStatus(s) }));
+  handle('posts:listTags', () => ({ ok: true, tags: a.posts.listTags() }));
+  handle('posts:listCategories', () => ({ ok: true, categories: a.posts.listCategories() }));
 
   handle('dashboard:stats', () => ({ ok: true, stats: a.dashboard.getStats() }));
   handle('dashboard:activity', (limit) => ({ ok: true, activity: a.dashboard.getRecentActivity(limit) }));
@@ -137,6 +298,18 @@ function registerIpc() {
   handle('settings:set', (k, v) => { a.settings.set(k, v); return { ok: true }; });
   handle('settings:getTheme', () => ({ ok: true, theme: a.settings.getTheme() }));
   handle('settings:setTheme', (t) => { a.settings.setTheme(t); return { ok: true, theme: a.settings.getTheme() }; });
+  handle('settings:getCustomCss', () => ({ ok: true, css: a.settings.getCustomCss() }));
+  handle('settings:setCustomCss', (c) => ({ ok: true, css: a.settings.setCustomCss(c || {}) }));
+  handle('settings:getBackground', () => ({ ok: true, bg: a.settings.getBackground() }));
+  handle('settings:setBackground', (c) => {
+    const cfg = c || {};
+    // If a dataUrl was provided, store it; otherwise keep existing url
+    const existing = a.settings.getBackground();
+    const nextUrl = cfg.dataUrl && String(cfg.dataUrl).trim() ? String(cfg.dataUrl) : (cfg.url || existing.url || '');
+    const result = a.settings.setBackground({ ...cfg, url: nextUrl });
+    return { ok: true, bg: result };
+  });
+  handle('settings:clearBackground', () => ({ ok: true, bg: a.settings.clearBackground() }));
   handle('settings:blogConfig', (cfg) => ({
     ok: true,
     blogPath: a.settings.getBlogPath(),
@@ -156,14 +329,19 @@ function registerIpc() {
   // themes & plugins management (operate on the configured blog path)
   handle('themes:list', () => a.themes.listThemes(blogPathOf()));
   handle('themes:activate', (theme) => a.themes.activateTheme(blogPathOf(), theme));
+  handle('themes:uninstall', (theme) => a.themes.uninstallTheme(blogPathOf(), theme));
   handle('themes:install', (name) => a.themes.installTheme(blogPathOf(), name));
+  handle('themes:listArchivedConfigs', () => a.themes.listArchivedConfigs(blogPathOf()));
+  handle('themes:archiveConfig', (theme) => a.themes.archiveConfig(blogPathOf(), theme));
+  handle('themes:restoreArchivedConfig', (theme) => a.themes.restoreArchivedConfig(blogPathOf(), theme));
   handle('plugins:list', () => {
     const r = a.themes.listPlugins(blogPathOf());
     if (r.ok && r.plugins) r.plugins.forEach(p => { p.hasRecipe = !!recipeFor(p.name); });
     return r;
   });
   handle('plugins:install', (pkg) => a.themes.installPlugin(blogPathOf(), pkg));
-  handle('plugins:uninstall', (pkg) => a.themes.uninstallPlugin(blogPathOf(), pkg));  // 通用 _config.yml 读写（写前自动增量备份）—— 交接文档 §3.4
+  handle('plugins:uninstall', (pkg) => a.themes.uninstallPlugin(blogPathOf(), pkg));
+  handle('plugins:listRecipePackages', () => ({ ok: true, packages: listRecipePackages() }));
   handle('config:read', (fileName) => {
     try {
       const bp = blogPathOf();
@@ -203,10 +381,48 @@ function registerIpc() {
   handle('config:writeTheme', (text) => {
     try { return a.themes.writeThemeConfig(blogPathOf(), String(text == null ? '' : text)); }
     catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
-  });  // 编辑系统可用配置文件清单：_config.yml + 所有 _config.<theme>.yml（交接文档 §2.2 扩展）
+  });
+  handle('config:readThemeByName', (themeName) => {
+    try {
+      const bp = blogPathOf();
+      const target = String(themeName || '').trim();
+      if (!target) return { ok: false, error: '请提供主题名称' };
+      const p = path.join(bp, '_config.' + target + '.yml');
+      return { ok: true, theme: target, content: fs.readFileSync(p, 'utf8') };
+    } catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  handle('config:readArchived', (themeName, file) => {
+    try {
+      const bp = blogPathOf();
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, '').replace('T', '-');
+      const defaultFile = 'config.' + (themeName || '') + '.' + ts + '.yml';
+      const targetFile = file || defaultFile;
+      const p = path.join(bp, 'themes', '.theme_configs', targetFile);
+      return { ok: true, theme: themeName, content: fs.readFileSync(p, 'utf8'), fileName: targetFile };
+    } catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  // 编辑系统可用配置文件清单：_config.yml + 所有 _config.<theme>.yml（交接文档 §2.2 扩展）
   handle('config:list', () => {
     try { return a.themes.listBlogConfigFiles(blogPathOf()); }
     catch (e) { return { ok: false, error: (e && e.message) ? e.message : String(e) }; }
+  });
+  // 确保主题配置文件存在（若不存在则创建空文件），返回文件名供编辑器直接加载
+  handle('config:initThemeFile', () => {
+    try {
+      const bp = blogPathOf();
+      const cfg = a.themes.readBlogConfig(bp);
+      const theme = a.themes.parseActiveTheme(cfg.text || '');
+      if (!theme) return { ok: true, theme: '', fileName: null };
+      const fileName = '_config.' + theme + '.yml';
+      const fsx = require('fs');
+      const fullPath = path.join(bp, fileName);
+      if (!fsx.existsSync(fullPath)) {
+        fsx.writeFileSync(fullPath, '', 'utf8');
+      }
+      return { ok: true, theme: theme, fileName: fileName };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+    }
   });
   // 通用编辑器「恢复备份」：参数可为 'site'/'theme'/任意 _config*.yml 文件名，只读回内容供核对，绝不覆盖原文件（安全红线 §四）
   handle('config:readBackup', (key) => {
@@ -272,10 +488,24 @@ function registerIpc() {
   // shell:true exits non-zero instead of throwing — start() would wrongly report
   // "running" and the renderer would show a blank iframe. Gate it first and return
   // installable guidance the renderer can act on (reuses env:installHexo).
+  // Cache hexo availability to avoid repeated 4s detection on each preview start.
+  let _hexoAvailableCache = null;
+  let _hexoAvailableTime = 0;
+  const HEXO_CACHE_TTL = 60000; // 1 minute cache
   function hexoAvailable() {
+    const now = Date.now();
+    if (_hexoAvailableCache !== null && now - _hexoAvailableTime < HEXO_CACHE_TTL) {
+      return Promise.resolve(_hexoAvailableCache);
+    }
     return new Promise((resolve) => {
       let done = false;
-      const finish = (val) => { if (done) return; done = true; resolve(val); };
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        _hexoAvailableCache = val;
+        _hexoAvailableTime = now;
+        resolve(val);
+      };
       const cmd = process.platform === 'win32' ? 'where' : 'which';
       let proc;
       try { proc = spawn(cmd, ['hexo'], { shell: true, windowsHide: true }); }
@@ -326,7 +556,63 @@ function registerIpc() {
     const env = a.env.detectEnvironment(runner);
     return { ok: true, env: env, guide: a.env.buildGuide(env) };
   });
+  // 自定义页面管理
+  handle('pages:list', () => a.pages.listPages());
+  handle('pages:create', (input) => a.pages.createPage(input || {}));
+  handle('pages:delete', (fileName) => a.pages.deletePage(fileName || ''));
+  handle('media:list', () => ({ ok: true, items: a.media.list() }));
+  handle('media:get', (id) => ({ ok: true, item: a.media.get(Number(id)) }));
+  handle('media:add', (input) => { try { return { ok: true, item: a.media.add(input || {}) }; } catch(e) { return { ok: false, error: (e && e.message) || '上传失败' }; } });
+  handle('media:delete', (id) => { try { return { ok: true, deleted: a.media.del(Number(id)) }; } catch(e) { return { ok: false, error: (e && e.message) || '删除失败' }; } });
+  handle('notices:list', () => ({ ok: true, items: a.notices.list() }));
+  handle('notices:get', (id) => ({ ok: true, item: a.notices.get(Number(id)) }));
+  handle('notices:add', (input) => { try { return { ok: true, item: a.notices.add(input || {}) }; } catch(e) { return { ok: false, error: (e && e.message) || '添加失败' }; } });
+  handle('notices:update', (id, input) => { try { return { ok: true, item: a.notices.update(Number(id), input || {}) }; } catch(e) { return { ok: false, error: (e && e.message) || '更新失败' }; } });
+  handle('notices:delete', (id) => { try { return { ok: true, deleted: a.notices.del(Number(id)) }; } catch(e) { return { ok: false, error: (e && e.message) || '删除失败' }; } });
   handle('markdown:render', (md) => ({ ok: true, html: require('../core/markdown').renderMarkdown(md) }));
+
+  // ---- Market: Hexo theme/plugin marketplace via npm registry ----
+  handle('market:searchThemes', (query, size) => a.market.searchThemes(String(query || ''), Number(size) || 20));
+  handle('market:searchPlugins', (query, category, size) => a.market.searchPlugins(String(query || ''), String(category || ''), Number(size) || 20));
+  handle('market:getPackage', (name) => a.market.getPackageDetails(String(name || '')));
+  handle('market:downloadPackage', (name, version, destDir) => a.market.downloadPackage(String(name || ''), String(version || ''), String(destDir || '')));
+  handle('market:installTheme', (name, version) => a.market.installTheme(String(name || ''), String(version || ''), blogPathOf()));
+  handle('market:installPlugin', (name, version) => a.market.installPlugin(String(name || ''), String(version || ''), blogPathOf()));
+  handle('market:fetchStars', (names) => a.market.fetchGitHubStars(Array.isArray(names) ? names : []));
+  handle('market:getCachedStars', () => ({ ok: true, stars: a.market.getCachedStars() }));
+  handle('market:getRegistry', () => ({ ok: true, registry: a.market.getRegistryUrl() }));
+  handle('market:setRegistry', (url) => {
+    const u = String(url || '').trim();
+    if (!u) return { ok: false, error: '不能为空' };
+    a.market.setRegistryUrl(u);
+    return { ok: true, registry: u };
+  });
+  // 在独立窗口中打开 Markdown 预览
+  handle('preview:openWindow', (md, title) => {
+    const html = require('../core/markdown').renderMarkdown(md || '');
+    if (previewWin) {
+      previewWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' + esc(title) + '</title>'
+        + '<style>*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#1e3a5f;background:#fff;font-size:15px;line-height:1.8}.'
+        + 'wrap{max-width:800px;margin:0 auto;padding:40px 32px}h1{font-size:2em;font-weight:800;margin-bottom:.3em;border-bottom:2px solid #e0eaff;padding-bottom:.3em}h2{font-size:1.5em;font-weight:700;margin:1.2em 0 .5em;border-bottom:1px solid #e0eaff;padding-bottom:.2em}h3{font-size:1.2em;font-weight:700;margin:1em 0 .4em}p{margin:.8em 0}ul,ol{padding-left:1.6em;margin:.6em 0}li{margin:.3em 0}blockquote{border-left:3px solid #2563eb;margin:1em 0;padding:.5em 1em;color:#5a7fa8;background:rgba(37,99,235,.05);border-radius:0 8px 8px 0}pre{background:#f5f9ff;border:1px solid #e0eaff;padding:14px;border-radius:10px;overflow-x:auto;margin:.8em 0}code{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:.88em;background:#f5f9ff;border:1px solid #e0eaff;border-radius:5px;padding:2px 6px}pre code{background:none;border:none;padding:0}a{color:#2563eb;text-decoration:none;border-bottom:1px dashed #2563eb}a:hover{border-bottom-style:solid}img{max-width:100%;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.1)}table{border-collapse:collapse;width:100%;margin:1em 0}th,td{border:1px solid #e0eaff;padding:8px 12px;text-align:left}th{background:#f5f9ff;font-weight:600}hr{border:none;border-top:2px solid #e0eaff;margin:1.5em 0}.empty{color:#5a7fa8;font-style:italic;text-align:center;padding:3em}</style>'
+        + '</head><body><div class="wrap">' + html + '</div></body></html>'
+      ));
+    } else {
+      previewWin = new BrowserWindow({
+        width: 900, height: 700, minWidth: 480, minHeight: 400,
+        title: title || 'Markdown 预览', backgroundColor: '#ffffff',
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
+      });
+      previewWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' + esc(title) + '</title>'
+        + '<style>*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:#1e3a5f;background:#fff;font-size:15px;line-height:1.8}.'
+        + 'wrap{max-width:800px;margin:0 auto;padding:40px 32px}h1{font-size:2em;font-weight:800;margin-bottom:.3em;border-bottom:2px solid #e0eaff;padding-bottom:.3em}h2{font-size:1.5em;font-weight:700;margin:1.2em 0 .5em;border-bottom:1px solid #e0eaff;padding-bottom:.2em}h3{font-size:1.2em;font-weight:700;margin:1em 0 .4em}p{margin:.8em 0}ul,ol{padding-left:1.6em;margin:.6em 0}li{margin:.3em 0}blockquote{border-left:3px solid #2563eb;margin:1em 0;padding:.5em 1em;color:#5a7fa8;background:rgba(37,99,235,.05);border-radius:0 8px 8px 0}pre{background:#f5f9ff;border:1px solid #e0eaff;padding:14px;border-radius:10px;overflow-x:auto;margin:.8em 0}code{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:.88em;background:#f5f9ff;border:1px solid #e0eaff;border-radius:5px;padding:2px 6px}pre code{background:none;border:none;padding:0}a{color:#2563eb;text-decoration:none;border-bottom:1px dashed #2563eb}a:hover{border-bottom-style:solid}img{max-width:100%;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.1)}table{border-collapse:collapse;width:100%;margin:1em 0}th,td{border:1px solid #e0eaff;padding:8px 12px;text-align:left}th{background:#f5f9ff;font-weight:600}hr{border:none;border-top:2px solid #e0eaff;margin:1.5em 0}.empty{color:#5a7fa8;font-style:italic;text-align:center;padding:3em}</style>'
+        + '</head><body><div class="wrap">' + html + '</div></body></html>'
+      ));
+      previewWin.on('closed', () => { previewWin = null; });
+    }
+    return { ok: true };
+  });
 
   // 启动提醒：返回 使用手册.md 全文，供渲染器内嵌渲染展示（安装目录根下）
   handle('notice:manual', () => {
@@ -340,6 +626,21 @@ function registerIpc() {
   });
 
   // 导入 .txt / .md 文件到编辑器：选择文件、读取内容，解析 front-matter 回填标题/正文
+  handle('files:openImage', async () => {
+    if (!win) return { ok: false, error: '窗口未就绪' };
+    const filters = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }];
+    const res = await dialog.showOpenDialog(win, { properties: ['openFile'], filters });
+    if (res.canceled) return { ok: false, cancelled: true };
+    const fpath = res.filePaths[0];
+    let dataUrl = '';
+    try {
+      const buf = fs.readFileSync(fpath);
+      const ext = path.extname(fpath).toLowerCase();
+      const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' }[ext] || 'image/png';
+      dataUrl = 'data:' + mime + ';base64,' + buf.toString('base64');
+    } catch (_) {}
+    return { ok: true, path: fpath, dataUrl };
+  });
   handle('files:openText', async () => {
     if (!win) return { ok: false, error: '窗口未就绪' };
     const filters = [{ name: '文本与 Markdown', extensions: ['txt', 'md', 'markdown'] }];
@@ -374,10 +675,21 @@ async function pickOpen(filters) {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);     // 移除默认菜单栏（文件/编辑/视图/窗口）
+  // 注册自定义协议用于 OAuth 回调（仅 Windows，macOS 用 open-url 事件）
+  if (process.platform === 'win32') {
+    try { app.setAsDefaultProtocolClient('hexostudio'); } catch (_) {}
+  }
   backend = createApp({ dbPath: dbPath() });
   registerIpc();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  // macOS: 打开 URL 事件（如从 Safari 点击 hexostudio:// 链接）
+  app.on('open-url', (_event, url) => { handleOAuthCallback(url); });
+  // Windows/Linux: 二次启动时收到 argv（其他实例已锁定 single-instance）
+  app.on('second-instance', (_event, argv) => {
+    const url = argv.find(a => String(a).startsWith('hexostudio://'));
+    if (url) handleOAuthCallback(url);
+  });
 });
 
 app.on('window-all-closed', () => {

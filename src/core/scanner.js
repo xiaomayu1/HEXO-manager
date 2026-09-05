@@ -16,17 +16,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { stripQuotes } = require('./utils');
 
 function nowIso() { return new Date().toISOString(); }
-
-function stripQuotes(s) {
-  s = String(s == null ? '' : s).trim();
-  if (s.length >= 2) {
-    const a = s[0], b = s[s.length - 1];
-    if ((a === '"' && b === '"') || (a === "'" && b === "'")) return s.slice(1, -1).trim();
-  }
-  return s;
-}
 
 function normalizeDate(raw) {
   if (raw == null) return nowIso();
@@ -209,7 +201,6 @@ module.exports = {
   createScannerService,
   parseFrontMatter,
   parseFrontMatterBlock,
-  normalizeDate,
-  stripQuotes
+  normalizeDate
 };
 

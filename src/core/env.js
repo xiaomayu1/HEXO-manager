@@ -8,6 +8,7 @@
 'use strict';
 
 const { spawnSync } = require('child_process');
+const { defaultSpawnSync } = require('./utils');
 
 function parseNodeVersion(stdout) {
   const m = /v(\d+)\.(\d+)\.(\d+)/.exec((stdout || '').trim());
@@ -28,18 +29,7 @@ function parseGitVersion(stdout) {
 }
 
 function defaultRunner(cmd, opts) {
-  opts = opts || {};
-  const r = spawnSync(cmd[0], cmd.slice(1), {
-    encoding: 'utf8',
-    timeout: opts.timeout || 8000,
-    shell: true
-  });
-  return {
-    ok: r.status === 0,
-    stdout: r.stdout || '',
-    stderr: r.stderr || '',
-    error: r.error ? r.error.message : ''
-  };
+  return defaultSpawnSync(cmd[0], cmd.slice(1), opts);
 }
 
 function detectEnvironment(runner, opts) {

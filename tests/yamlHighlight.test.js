@@ -1,4 +1,5 @@
-const { highlightYaml, escapeHtml } = require('../src/core/yamlHighlight');
+const { highlightYaml } = require('../src/core/yamlHighlight');
+const { escapeHtml } = require('../src/core/utils');
 
 describe('yamlHighlight', () => {
   test('colors top-level keys and keeps values plain', () => {

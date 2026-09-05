@@ -53,6 +53,29 @@ function createSettingsService(db) {
     return theme;
   }
 
+  // ---- Custom CSS color overrides (stored as JSON string) ----
+  const CUSTOM_CSS_KEY = 'custom_css';
+  function getCustomCss() {
+    const raw = get(CUSTOM_CSS_KEY, '');
+    if (!raw) return {};
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  function setCustomCss(overrides) {
+    const obj = overrides || {};
+    // Validate: only allow valid CSS variable name keys and hex color values
+    const validated = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const k = String(key).trim();
+      const v = String(value).trim();
+      if (!k.startsWith('--')) continue;
+      if (/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) || /^rgba?\(/.test(v)) {
+        validated[k] = v;
+      }
+    }
+    set(CUSTOM_CSS_KEY, JSON.stringify(validated));
+    return validated;
+  }
+
   // ---- Blog config ----
   function getBlogPath() { return get('blog_path', ''); }
   function setBlogPath(p) { set('blog_path', p || ''); }
@@ -82,9 +105,27 @@ function createSettingsService(db) {
     return next;
   }
 
+  function getBackground() {
+    const raw = get('bg_image', '');
+    if (!raw) return { url: '', opacity: 0.4, blur: 0 };
+    try { return JSON.parse(raw); } catch { return { url: '', opacity: 0.4, blur: 0 }; }
+  }
+  function setBackground(cfg) {
+    const c = cfg || {};
+    set('bg_image', JSON.stringify({
+      url: String(c.url || ''),
+      opacity: Math.min(1, Math.max(0, parseFloat(c.opacity) || 0.4)),
+      blur: Math.max(0, parseFloat(c.blur) || 0)
+    }));
+    return getBackground();
+  }
+  function clearBackground() { return setBackground({ url: '', opacity: 0.4, blur: 0 }); }
+
   return {
     get, set, getAll, remove,
     THEMES, getTheme, setTheme,
+    getCustomCss, setCustomCss,
+    getBackground, setBackground, clearBackground,
     getBlogPath, setBlogPath, getSiteTitle, setSiteTitle,
     getBlogUrl, setBlogUrl, getBackupPath, setBackupPath,
     getDeployConfig, setDeployConfig

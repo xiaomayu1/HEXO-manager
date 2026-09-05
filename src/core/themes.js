@@ -15,7 +15,66 @@
 
 const fs = require('fs');
 const path = require('path');
+const { defaultSpawnSync, yamlQuote: utilsYamlQuote, yamlUnquote: utilsYamlUnquote, stripQuotes } = require('./utils');
 const defaultRecipes = require('./pluginRecipes').RECIPES;
+
+const _ARCHIVE_RE = /^config\.(.+)\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.yml$/;
+
+function archiveDir(blogPath) {
+  return path.join(blogPath, 'themes', '.theme_configs');
+}
+
+function _archiveFileName(themeName) {
+  const ts = new Date().toISOString().replace(/\.\d{3}Z$/, '').replace('T', '-');
+  return 'config.' + themeName + '.' + ts + '.yml';
+}
+
+function listArchivedConfigs(fsx, blogPath) {
+  requireBlogPath(blogPath);
+  const dir = archiveDir(blogPath);
+  let entries = [];
+  try { entries = fsx.readdirSync(dir); } catch (e) { return { ok: true, configs: {} }; }
+  const groups = {};
+  for (const n of entries) {
+    if (!n || !_ARCHIVE_RE.test(n)) continue;
+    const m = _ARCHIVE_RE.exec(n);
+    const themeName = m[1];
+    const tsStr = m[2];
+    let stat = {};
+    try { stat = fsx.statSync(path.join(dir, n)); } catch (e) {}
+    const file = { theme: themeName, file: n, mtime: stat.mtime, mtimeStr: tsStr };
+    if (!groups[themeName]) groups[themeName] = [];
+    groups[themeName].push(file);
+  }
+  for (const t of Object.keys(groups)) groups[t].sort(function (a, b) { return b.mtime - a.mtime; });
+  return { ok: true, configs: groups };
+}
+
+function archiveConfig(fsx, blogPath, theme) {
+  requireBlogPath(blogPath);
+  const themeName = String(theme || '').trim();
+  if (!themeName) return { ok: false, error: '主题名称不能为空' };
+  const src = path.join(blogPath, '_config.' + themeName + '.yml');
+  if (!fs.existsSync(src)) return { ok: false, error: '主题配置不存在：_config.' + themeName + '.yml' };
+  const dir = archiveDir(blogPath);
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  const name = _archiveFileName(themeName);
+  const dest = path.join(dir, name);
+  fsx.copyFileSync(src, dest);
+  return { ok: true, theme: themeName, file: name, path: dest };
+}
+
+function restoreArchivedConfig(fsx, blogPath, theme, file) {
+  requireBlogPath(blogPath);
+  const themeName = String(theme || '').trim();
+  if (!themeName) return { ok: false, error: '主题名称不能为空' };
+  const f = file || _archiveFileName(themeName).split('.').slice(2).join('.');
+  const archived = path.join(archiveDir(blogPath), f);
+  if (!fs.existsSync(archived)) return { ok: false, error: '归档中未找到该配置：' + f };
+  const dst = path.join(blogPath, '_config.' + themeName + '.yml');
+  fsx.copyFileSync(archived, dst);
+  return { ok: true, theme: themeName, restoredFile: f };
+}
 
 function pluginCategory(name) {
   if (!name) return 'other';
@@ -130,21 +189,8 @@ function mergeYamlSegment(existing, segment) {
   return { content: body, added: added, skipped: skipped };
 }
 
-function yamlQuote(s) {
-  s = String(s == null ? '' : s);
-  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-}
-
-function yamlUnquote(s) {
-  s = String(s == null ? '' : s).trim();
-  if (s.length >= 2) {
-    const a = s.charAt(0), b = s.charAt(s.length - 1);
-    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
-      return s.slice(1, -1).replace(/\\"/g, '"');
-    }
-  }
-  return s;
-}
+const yamlQuote = utilsYamlQuote;
+const yamlUnquote = utilsYamlUnquote;
 
 // 把 items 合并进主题配置 inject.<blockKey> 列表（Butterfly inject.head / inject.bottom）。
 // 已存在的项跳过；缺 inject/head 块则补建。约定 4 空格缩进的列表项 `    - <item>`。
@@ -295,27 +341,14 @@ function listNpmPlugins(pkg) {
   return out;
 }
 
-function defaultSpawner(cmd, args, opts) {
-  opts = opts || {};
-  const { spawnSync } = require('child_process');
-  const r = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    timeout: opts.timeout || 180000,
-    shell: true,
-    cwd: opts.cwd || undefined
-  });
-  return {
-    ok: r.status === 0,
-    stdout: r.stdout || '',
-    stderr: r.stderr || '',
-    error: r.error ? r.error.message : ''
-  };
+function npmSpawner(cmd, args, opts) {
+  return defaultSpawnSync(cmd, args, { ...opts, timeout: 180000 });
 }
 
 function createThemesService(opts) {
   opts = opts || {};
   const fsx = opts.fs || fs;
-  const spawn = opts.spawn || defaultSpawner;
+  const spawn = opts.spawn || npmSpawner;
 
   function requireBlogPath(blogPath) {
     if (!blogPath) {
@@ -352,12 +385,29 @@ function createThemesService(opts) {
       e.code = 'EMPTY_THEME';
       throw e;
     }
+    // 归档旧主题配置（若有）
     const cfgPath = path.join(blogPath, '_config.yml');
     let content = '';
     try { content = fsx.readFileSync(cfgPath, 'utf8'); } catch (e) { content = ''; }
+    const oldTheme = parseActiveTheme(content);
+    let archived = null, restored = null;
+    if (oldTheme && oldTheme !== name) {
+      try {
+        const r = archiveConfig(fsx, blogPath, oldTheme);
+        if (r.ok) archived = r.theme;
+      } catch (_) {}
+    }
+    // 若归档中有目标主题配置且当前尚无该主题的配置文件，则自动恢复（不覆盖用户已手动写的配置）
+    try {
+      const targetPath = path.join(blogPath, '_config.' + name + '.yml');
+      if (!fs.existsSync(targetPath)) {
+        const rr = restoreArchivedConfig(fsx, blogPath, name);
+        if (rr.ok) restored = rr.theme;
+      }
+    } catch (_) {}
     const next = applyThemeLine(content, name);
     fsx.writeFileSync(cfgPath, next, 'utf8');
-    return { ok: true, active: name };
+    return { ok: true, active: name, archived: archived, restored: restored };
   }
 
   function listPlugins(blogPath) {
@@ -544,8 +594,12 @@ function createThemesService(opts) {
     let injectPlan = null;
     if (recipe.inject) {
       const theme = parseActiveTheme(existing);
+      const supported = (recipe.supportedThemes || []).map(s => s.toLowerCase());
+      const themeCompat = !supported.length || !theme || supported.indexOf(theme.toLowerCase()) >= 0;
       if (!theme) {
-        injectPlan = { theme: '', file: '', added: [], skipped: [], note: '未配置主题，已跳过 inject' };
+        injectPlan = { theme: '', file: '', added: [], skipped: [], note: '未配置主题，已跳过 inject', compat: false, compatNote: '尚未配置主题，inject 注入无法应用。请先切换到 Butterfly/Volantis/Next 等支持 inject 的主题。' };
+      } else if (!themeCompat) {
+        injectPlan = { theme: theme, file: '', added: [], skipped: [], note: '当前主题「' + theme + '」不支持 inject 注入', compat: false, compatNote: '该插件需要主题支持 inject.head / inject.bottom 注入点（如 Butterfly、Volantis、NexT、Redefine、Fluid、Melody、Matery）。请切换主题或手动编辑 _config.<theme>.yml。' };
       } else {
         const tPath = path.join(blogPath, '_config.' + theme + '.yml');
         let tContent = '';
@@ -559,7 +613,20 @@ function createThemesService(opts) {
           const r2 = mergeInjectItems(tContent, 'bottom', recipe.inject.bottom);
           tContent = r2.content; added = added.concat(r2.added); skipped = skipped.concat(r2.skipped);
         }
-        injectPlan = { theme: theme, file: tPath, content: tContent, added: added, skipped: skipped, existed: fileExistsRaw(fsx, tPath) };
+        injectPlan = { theme: theme, file: tPath, content: tContent, added: added, skipped: skipped, existed: fileExistsRaw(fsx, tPath), compat: true, compatNote: '' };
+      }
+    }
+    // 主题配置（themeConfig：按主题写入 _config.<theme>.yml，仅适用于当前活动主题）
+    let themeConfigPlan = null;
+    if (recipe.themeConfig) {
+      const activeTheme = parseActiveTheme(existing);
+      const themeCfg = recipe.themeConfig[activeTheme];
+      if (themeCfg) {
+        const tPath = path.join(blogPath, '_config.' + activeTheme + '.yml');
+        let tContent = '';
+        try { tContent = fsx.readFileSync(tPath, 'utf8'); } catch (e) { tContent = ''; }
+        const merged = mergeYamlSegment(tContent, themeCfg);
+        themeConfigPlan = { theme: activeTheme, file: tPath, content: merged.content, added: merged.added, skipped: merged.skipped, existed: fileExistsRaw(fsx, tPath) };
       }
     }
     // 博客本地 scripts（hexo 启动时执行）/ source 静态资源
@@ -583,7 +650,7 @@ function createThemesService(opts) {
       ok: true, recipe: recipe, pkg: pkg, existing: existing,
       configChanged: configChanged, configAdded: merged.added, configSkipped: merged.skipped,
       permalinkValue: recipe.permalink || null, permalinkExisting: permExisting, permalinkAction: permAction,
-      finalConfig: finalConfig, inject: injectPlan, scripts: scripts, assets: assets
+      finalConfig: finalConfig, inject: injectPlan, themeConfig: themeConfigPlan, scripts: scripts, assets: assets
     };
   }
 
@@ -623,13 +690,30 @@ function createThemesService(opts) {
       }
     }
     if (plan.inject) {
-      if (!plan.inject.theme) {
-        writes.push({ kind: 'inject', file: '', action: 'skip', label: 'inject：未配置主题，已跳过' }); skipped.push('inject 跳过');
+      if (!plan.inject.compat) {
+        // Theme not compatible or not configured
+        if (plan.inject.compatNote) {
+          writes.push({ kind: 'inject', file: '', action: 'skip', label: plan.inject.compatNote, conflict: true });
+          skipped.push(plan.inject.compatNote);
+        } else {
+          writes.push({ kind: 'inject', file: '', action: 'skip', label: 'inject：未配置主题，已跳过' });
+          skipped.push('inject 跳过');
+        }
       } else if (plan.inject.added && plan.inject.added.length) {
         writes.push({ kind: 'inject', file: '_config.' + plan.inject.theme + '.yml', action: 'append', label: '_config.' + plan.inject.theme + '.yml — inject 追加 ' + plan.inject.added.length + ' 项：' + plan.inject.added.join(' | ') });
       } else if (plan.inject.skipped && plan.inject.skipped.length) {
         const l = '_config.' + plan.inject.theme + '.yml — inject 项已存在，跳过';
         writes.push({ kind: 'inject', action: 'skip', file: '_config.' + plan.inject.theme + '.yml', label: l }); skipped.push(l);
+      }
+    }
+    // Theme config (themeConfig: per-theme settings in _config.<theme>.yml)
+    if (plan.themeConfig) {
+      if (plan.themeConfig.added && plan.themeConfig.added.length) {
+        writes.push({ kind: 'themeConfig', file: '_config.' + plan.themeConfig.theme + '.yml', action: 'append', label: '_config.' + plan.themeConfig.theme + '.yml — 追加 ' + plan.themeConfig.added.join(', ') + ' 段（主题配置）' });
+      }
+      if (plan.themeConfig.skipped && plan.themeConfig.skipped.length) {
+        const l = '_config.' + plan.themeConfig.theme + '.yml — 跳过 ' + plan.themeConfig.skipped.join(', ') + ' 段（已存在，未覆盖）';
+        writes.push({ kind: 'themeConfig', file: '_config.' + plan.themeConfig.theme + '.yml', action: 'skip', label: l }); skipped.push(l);
       }
     }
     return { ok: true, label: plan.recipe.label, desc: plan.recipe.desc, note: plan.recipe.note || '', writes: writes, skipped: skipped, conflicts: conflicts };
@@ -659,6 +743,12 @@ function createThemesService(opts) {
         fsx.writeFileSync(plan.inject.file, plan.inject.content, 'utf8');
         applied.push('_config.' + plan.inject.theme + '.yml inject（备份：' + (tbak || '新建') + '）');
       }
+      // Theme config (themeConfig: per-theme settings)
+      if (plan.themeConfig && plan.themeConfig.added && plan.themeConfig.added.length) {
+        const tbak = backupFileIfExists(fsx, plan.themeConfig.file);
+        fsx.writeFileSync(plan.themeConfig.file, plan.themeConfig.content, 'utf8');
+        applied.push('_config.' + plan.themeConfig.theme + '.yml 主题配置（备份：' + (tbak || '新建') + '）');
+      }
       for (let i = 0; i < plan.scripts.length; i++) {
         if (plan.scripts[i].exists) continue;
         const body = (plan.recipe.scripts[i] || {}).body || '';
@@ -678,11 +768,43 @@ function createThemesService(opts) {
     return { ok: true, applied: applied, skipped: summary.skipped, conflicts: summary.conflicts, note: plan.recipe.note || '', advice: advice };
   }
 
-  return { listThemes, activateTheme, listPlugins, installPlugin, installTheme, uninstallPlugin,
-           readBlogConfig, writeBlogConfig, readBlogConfigFile, writeBlogConfigFile, readThemeConfig, writeThemeConfig, readConfigBackup, listBlogConfigFiles, planRecipe, applyRecipe };
+  // Built-in theme names that cannot be deleted
+  const PROTECTED_THEMES = new Set(['landscape']);
+
+  function uninstallTheme(blogPath, theme) {
+    requireBlogPath(blogPath);
+    const name = String(theme || '').trim();
+    if (!name) {
+      const e = new Error('主题名称不能为空');
+      e.code = 'EMPTY_THEME';
+      throw e;
+    }
+    if (PROTECTED_THEMES.has(name)) {
+      return { ok: false, error: `「${name}」是 Hexo 内置主题，不能删除。` };
+    }
+    // Check if npm-installed (in package.json dependencies)
+    const pkg = readBlogPackageJson(fsx, blogPath);
+    const npmName = name.startsWith('hexo-theme-') ? name : 'hexo-theme-' + name;
+    if (pkg && pkg.dependencies && pkg.dependencies[npmName]) {
+      const res = runNpm(blogPath, 'uninstall', npmName);
+      return res && res.ok ? { ok: true, name: npmName }
+        : { ok: false, error: (res && res.error) || '卸载失败', stderr: (res && res.stderr) || '' };
+    }
+    // Local theme: remove directory
+    const themeDir = path.join(blogPath, 'themes', name);
+    if (!fs.existsSync(themeDir)) {
+      return { ok: false, error: '主题目录不存在：' + name };
+    }
+    fs.rmSync(themeDir, { recursive: true, force: true });
+    return { ok: true, name };
+  }
+
+  return { listThemes, activateTheme, uninstallTheme, listPlugins, installPlugin, installTheme, uninstallPlugin,
+           readBlogConfig, writeBlogConfig, readBlogConfigFile, writeBlogConfigFile, readThemeConfig, writeThemeConfig, readConfigBackup, listBlogConfigFiles, planRecipe, applyRecipe,
+           listArchivedConfigs, archiveConfig, restoreArchivedConfig };
 }
 
-module.exports = {
+const _THEMES_EXPORTS = {
   createThemesService,
   parseActiveTheme,
   applyThemeLine,
@@ -695,8 +817,12 @@ module.exports = {
   mergeInjectItems,
   getScalarLine,
   applyScalarLine,
-  yamlQuote,
-  yamlUnquote
+  archiveDir,
+  listArchivedConfigs,
+  archiveConfig,
+  restoreArchivedConfig
 };
+
+module.exports = _THEMES_EXPORTS;
 
 

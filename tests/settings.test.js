@@ -82,4 +82,43 @@ describe('settings service (Phase 5)', () => {
   test('THEMES exposes the two supported themes', () => {
     expect(THEMES).toEqual(['light', 'dark']);
   });
+
+  describe('custom CSS color overrides', () => {
+    test('getCustomCss returns empty object when unset', () => {
+      expect(settings.getCustomCss()).toEqual({});
+    });
+
+    test('setCustomCss validates and stores only valid hex/rgba values', () => {
+      const r = settings.setCustomCss({
+        '--accent': '#2563eb',
+        '--bg': '#f0f6ff',
+        '--text': 'not-a-color',
+        'no-dash': '#fff',
+        '--ok': 'rgba(22,163,74,0.8)'
+      });
+      expect(r).toEqual({ '--accent': '#2563eb', '--bg': '#f0f6ff', '--ok': 'rgba(22,163,74,0.8)' });
+      const stored = settings.getCustomCss();
+      expect(stored['--accent']).toBe('#2563eb');
+      expect(stored['--bg']).toBe('#f0f6ff');
+      expect(stored['--ok']).toBe('rgba(22,163,74,0.8)');
+      expect(stored).not.toHaveProperty('--text');
+      expect(stored).not.toHaveProperty('no-dash');
+    });
+
+    test('persisted custom css survives reopen', () => {
+      const p = tmpDbPath('css-persist');
+      const db1 = openDatabase(p);
+      createSettingsService(db1).setCustomCss({ '--accent': '#e11d48' });
+      db1.close();
+      const db2 = openDatabase(p);
+      expect(createSettingsService(db2).getCustomCss()['--accent']).toBe('#e11d48');
+      db2.close();
+    });
+
+    test('setCustomCss with null stores empty object', () => {
+      settings.setCustomCss({ '--accent': '#111' });
+      settings.setCustomCss(null);
+      expect(settings.getCustomCss()).toEqual({});
+    });
+  });
 });

@@ -1,4 +1,5 @@
-const { createScannerService, parseFrontMatter, normalizeDate, stripQuotes } = require('../src/core/scanner');
+const { createScannerService, parseFrontMatter, normalizeDate } = require('../src/core/scanner');
+const { stripQuotes } = require('../src/core/utils');
 
 const norm = p => (p == null ? '' : p).split('\\').join('/').replace(/\/+$/, '');
 

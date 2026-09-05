@@ -135,7 +135,127 @@ function createAuthService(db, opts) {
     return { ok: true };
   }
 
-  return { register, login, logout, currentUser, listUsers, count, getProfile, updateProfile, changePassword };
+  // ---- OAuth account binding ----
+  const OAUTH_PROVIDERS = ['github', 'gitee'];
+  const OAUTH_CONFIG = {
+    github: {
+      authorizeUrl: 'https://github.com/login/oauth/authorize',
+      tokenUrl: 'https://github.com/login/oauth/access_token',
+      userInfoUrl: 'https://api.github.com/user',
+      scopes: 'read:user user:email'
+    },
+    gitee: {
+      authorizeUrl: 'https://gitee.com/oauth/authorize',
+      tokenUrl: 'https://gitee.com/oauth/token',
+      userInfoUrl: 'https://gitee.com/api/v5/user',
+      scopes: 'user'
+    }
+  };
+
+  function getOAuthConfig(provider) {
+    const cfg = OAUTH_CONFIG[provider];
+    if (!cfg) throw fail('UNKNOWN_PROVIDER', '不支持的第三方平台: ' + provider);
+    return cfg;
+  }
+
+  const stmtOAuthInsert = db.prepare(
+    'INSERT INTO user_oauth_accounts (user_id, provider, provider_user_id, access_token, refresh_token, token_expires_at, linked_at) VALUES (?,?,?,?,?,?,?)'
+  );
+  const stmtOAuthFindByProviderUser = db.prepare(
+    'SELECT * FROM user_oauth_accounts WHERE provider=? AND provider_user_id=?'
+  );
+  const stmtOAuthFindByUserProvider = db.prepare(
+    'SELECT * FROM user_oauth_accounts WHERE user_id=? AND provider=?'
+  );
+  const stmtOAuthDelete = db.prepare(
+    'DELETE FROM user_oauth_accounts WHERE user_id=? AND provider=?'
+  );
+  const stmtOAuthLinkUser = db.prepare(
+    'UPDATE user_oauth_accounts SET user_id=? WHERE provider=? AND provider_user_id=?'
+  );
+  const stmtOAuthAllByUser = db.prepare(
+    'SELECT provider, provider_user_id, access_token, refresh_token, token_expires_at, linked_at FROM user_oauth_accounts WHERE user_id=? ORDER BY linked_at'
+  );
+
+  function getAuthorizeUrl(provider, state) {
+    const cfg = getOAuthConfig(provider);
+    const clientId = (opts && opts.oauth && opts.oauth[provider] && opts.oauth[provider].clientId) || '';
+    if (!clientId) throw fail('MISSING_CLIENT_ID', '未配置 ' + provider + ' 的 Client ID');
+    const redirectUri = (opts && opts.oauthRedirectUri) || 'hexostudio://oauth/callback';
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      state: state || '',
+      scope: cfg.scopes
+    });
+    return cfg.authorizeUrl + '?' + params.toString();
+  }
+
+  function linkAccount(input) {
+    if (!session) throw fail('NOT_LOGGED_IN', '尚未登录');
+    const i = input || {};
+    const provider = String(i.provider || '').trim().toLowerCase();
+    const accessToken = String(i.access_token || '');
+    const refreshToken = String(i.refresh_token || '');
+    const providerUserId = String(i.provider_user_id || '');
+    const expiresIn = i.expires_in || null;
+    if (!provider || !accessToken || !providerUserId) {
+      throw fail('INVALID_INPUT', '缺少必要参数');
+    }
+    const cfg = getOAuthConfig(provider);
+    const existing = stmtOAuthFindByProviderUser.get(provider, providerUserId);
+    if (existing) {
+      if (existing.user_id !== session.id) {
+        throw fail('ACCOUNT_ALREADY_LINKED', '该第三方账号已绑定到其他用户');
+      }
+      return { ok: true, provider: provider, provider_user_id: providerUserId };
+    }
+    const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+    stmtOAuthInsert.run(session.id, provider, providerUserId, accessToken, refreshToken, expiresAt, new Date().toISOString());
+    return { ok: true, provider: provider, provider_user_id: providerUserId };
+  }
+
+  function unlinkAccount(provider) {
+    if (!session) throw fail('NOT_LOGGED_IN', '尚未登录');
+    const providerLower = String(provider || '').trim().toLowerCase();
+    const result = stmtOAuthDelete.run(session.id, providerLower);
+    if (result.changes === 0) throw fail('NOT_LINKED', '该第三方账号未绑定');
+    return { ok: true, provider: providerLower };
+  }
+
+  function listLinkedAccounts() {
+    if (!session) throw fail('NOT_LOGGED_IN', '尚未登录');
+    return stmtOAuthAllByUser.all(session.id).map(row => ({
+      provider: row.provider,
+      provider_user_id: row.provider_user_id,
+      linked_at: row.linked_at
+    }));
+  }
+
+  function isLinked(provider) {
+    if (!session) return false;
+    const providerLower = String(provider || '').trim().toLowerCase();
+    const row = stmtOAuthFindByUserProvider.get(session.id, providerLower);
+    return !!row;
+  }
+
+  function findByProviderUser(provider, providerUserId) {
+    const providerLower = String(provider || '').trim().toLowerCase();
+    const row = stmtOAuthFindByProviderUser.get(providerLower, String(providerUserId || ''));
+    if (!row) return null;
+    return stmtById.get(row.user_id);
+  }
+
+  function logout() {
+    const had = !!session;
+    session = null;
+    return had;
+  }
+
+  return { register, login, logout, currentUser, listUsers, count, getProfile, updateProfile, changePassword,
+    getOAuthConfig, getAuthorizeUrl, linkAccount, unlinkAccount, listLinkedAccounts, isLinked,
+    findByProviderUser, OAUTH_PROVIDERS, OAUTH_CONFIG, session: { get: () => session, set: (s) => { session = s; } }
+  };
 }
 
 module.exports = { createAuthService };

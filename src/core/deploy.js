@@ -7,27 +7,10 @@
  */
 'use strict';
 
-const { spawnSync } = require('child_process');
-
-function defaultSpawner(cmd, args, opts) {
-  opts = opts || {};
-  const r = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    timeout: opts.timeout || 120000,
-    shell: true,
-    cwd: opts.cwd || undefined
-  });
-  return {
-    ok: r.status === 0,
-    code: r.status,
-    stdout: r.stdout || '',
-    stderr: r.stderr || '',
-    error: r.error ? r.error.message : ''
-  };
-}
+const { defaultSpawnSync } = require('./utils');
 
 function createDeployService(db, settings, opts) {
-  const spawn = (opts && opts.spawn) || defaultSpawner;
+  const spawn = (opts && opts.spawn) || defaultSpawnSync;
 
   const stmtInsertLog = db.prepare(
     `INSERT INTO deploy_logs
@@ -120,4 +103,4 @@ function createDeployService(db, settings, opts) {
   return { getConfig, setConfig, deploy, history, latestDeploy, totalDeploys };
 }
 
-module.exports = { createDeployService, defaultSpawner };
+module.exports = { createDeployService };

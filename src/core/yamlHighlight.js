@@ -12,11 +12,7 @@
  * 这不是 YAML 解析器，只用于可视化提示，绝不参与读/写判定。
  */
 
-function escapeHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&#38;').replace(/</g, '&#60;').replace(/>/g, '&#62;')
-    .replace(/"/g, '&#34;').replace(/'/g, '&#39;');
-}
+const { escapeHtml } = require('./utils');
 
 function highlightYaml(text) {
   const lines = String(text == null ? '' : text).split(/\r?\n/);

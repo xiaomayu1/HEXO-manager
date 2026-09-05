@@ -39,6 +39,14 @@
  *                         Already-present items are skipped; absent keys are
  *                         created. If there is no theme config the file is
  *                         created with a minimal inject block.
+ *   supportedThemes {string[]}            theme names that support this inject style.
+ *                         If omitted, any theme is assumed compatible.
+ *                         When the active theme is NOT in this list, a warning is
+ *                         shown in the preview instead of silently applying.
+ *   themeConfig {Object<string, string>}  YAML text to merge into _config.<theme>.yml
+ *                         (not _config.yml). Keys match top-level config keys.
+ *                         Used when a plugin needs theme-specific settings (e.g.
+ *                         Butterfly's search.use field). Only applies to listed themes.
  *
  * Only verified recipes are shipped here. Do NOT add a recipe whose `scripts`/
  * `assets`/`inject` body you cannot verify against the plugin's real README —
@@ -46,16 +54,21 @@
  */
 const RECIPES = {
   'hexo-generator-search': {
-    label: '本地搜索',
-    desc: '为博客生成 search.xml，配合主题搜索框使用。',
+    label: '本地搜索（generator-search）',
+    desc: '生成 search.xml，配合主题的本地搜索功能使用。',
     config: '\nsearch:\n  path: search.xml\n  field: post\n  content: true\n  format: html\n',
-    note: '会在博客根 _config.yml 追加 search: 段。'
+    themeConfig: {
+      butterfly: '\nsearch:\n  use: local_search\n',
+    },
+    supportedThemes: ['butterfly', 'volantis', 'next', 'redefine', 'fluid', 'melody', 'matery'],
+    note: '写入博客根 _config.yml 的 search: 段，并在 Butterfly 主题配置中启用本地搜索。'
   },
   'hexo-generator-searchdb': {
     label: '本地搜索（searchdb）',
-    desc: '为博客生成 search.xml（searchdb 版本），配合主题搜索框使用。',
+    desc: '生成 search.xml（searchdb 版本），性能更好，支持全文检索。',
     config: '\nsearch:\n  path: search.xml\n  field: post\n  content: true\n  format: html\n',
-    note: '会在博客根 _config.yml 追加 search: 段。'
+    supportedThemes: ['butterfly', 'volantis', 'next', 'redefine', 'fluid', 'melody', 'matery'],
+    note: '写入 _config.yml 的 search: 段。若使用 Butterfly 主题，还需在主题配置 _config.butterfly.yml 中设置 search.use: local_search，否则搜索框不会显示。'
   },
   'hexo-abbrlink': {
     label: '永久链接',
@@ -69,6 +82,36 @@ const RECIPES = {
     desc: '给外链加 rel="nofollow"，提升站内权重。',
     config: '\nnofollow:\n  enable: true\n  field: site\n  exclude:\n    - example.com\n    - github.com\n',
     note: '会在博客根 _config.yml 追加 nofollow: 段。'
+  },
+  'hexo-wordcount': {
+    label: '字数统计',
+    desc: '在页面底部显示文章字数和阅读时长，需主题支持 inject。',
+    inject: {
+      bottom: [
+        '<span class="post-wordcount">本文约 {{ wordcount }} 字 | 预计阅读 {{ min_reading }} 分钟</span>'
+      ]
+    },
+    supportedThemes: ['butterfly', 'volantis', 'next', 'redefine', 'fluid', 'melody', 'matery'],
+    note: '会在主题配置 _config.<theme>.yml 的 inject.bottom 追加字数统计元素。当前主题需支持 inject 注入点才能生效（Butterfly/Volantis/Next/Redefine/Fluid/Melody/Matery）。'
+  },
+  'hexo-generator-feed': {
+    label: 'RSS 订阅',
+    desc: '为博客生成 RSS/Atom 订阅源，需在头部注入链接。',
+    config: '\nfeed:\n  type: atom\n  path: atom.xml\n  limit: 20\n  hub:\n  content:\n',
+    inject: {
+      head: [
+        '<link rel="alternate" href="/atom.xml" title="RSS 订阅" type="application/atom+xml">'
+      ]
+    },
+    supportedThemes: ['butterfly', 'volantis', 'next', 'redefine', 'fluid', 'melody', 'matery'],
+    note: '会在 _config.yml 追加 feed: 段，并在主题配置 inject.head 添加 RSS 链接。'
+  },
+  'hexo-generator-sitemap': {
+    label: '站点地图',
+    desc: '生成 sitemap.xml，提交给搜索引擎收录。',
+    config: '\nsitemap:\n  path: sitemap.xml\n',
+    supportedThemes: [],  // 纯配置，不依赖主题
+    note: '会在博客根 _config.yml 追加 sitemap: 段。'
   }
 };
 

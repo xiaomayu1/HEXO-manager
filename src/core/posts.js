@@ -121,6 +121,24 @@ function createPostsService(db) {
   function getPost(id) { return toPublic(stmtGetById.get(id)); }
   function listPosts() { return stmtListActive.all().map(toPublic); }
 
+  function listTags() {
+    const rows = stmtListActive.all();
+    const tagCount = {};
+    rows.forEach(p => (p.tags || []).forEach(t => { tagCount[t] = (tagCount[t] || 0) + 1; }));
+    return Object.entries(tagCount)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+  }
+
+  function listCategories() {
+    const rows = stmtListActive.all();
+    const catCount = {};
+    rows.forEach(p => (p.categories || []).forEach(c => { catCount[c] = (catCount[c] || 0) + 1; }));
+    return Object.entries(catCount)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+  }
+
   function searchPosts(query) {
     const q = (query == null ? '' : String(query)).trim();
     if (!q) return listPosts();
@@ -138,7 +156,8 @@ function createPostsService(db) {
 
   return {
     createPost, updatePost, deletePost, getPost,
-    listPosts, searchPosts, filterByStatus, VALID_STATUSES
+    listPosts, searchPosts, filterByStatus, VALID_STATUSES,
+    listTags, listCategories
   };
 }
 

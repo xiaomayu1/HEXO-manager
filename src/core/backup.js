@@ -94,7 +94,8 @@ function exportToBak(db, dbPath, destPath) {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   fs.copyFileSync(dbPath, destPath);
   const stat = fs.statSync(destPath);
-  return { path: destPath, bytes: stat.size, rows: countRows(collectEnvelope(db)), rowsByTable: rowCounts(collectEnvelope(db)) };
+  const env = collectEnvelope(db);
+  return { path: destPath, bytes: stat.size, rows: countRows(env), rowsByTable: rowCounts(env) };
 }
 
 function restore(db, sourcePath) {
