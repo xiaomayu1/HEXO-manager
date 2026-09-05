@@ -495,11 +495,12 @@ function createMarketService(opts) {
     const detail = await getPackageDetails(name);
     if (!detail.ok) return { ok: false, error: detail.error };
 
-    const destPath = path.join(destDir, `${name}-${version}.tgz`);
+    const actualVersion = (version === 'latest' ? (detail.distTags?.latest || version) : version);
+    const destPath = path.join(destDir, `${name}-${actualVersion}.tgz`);
 
     // Use the tarball URL directly from the API response when available
-    const tgzUrl = (detail.versions && detail.versions[version] && detail.versions[version].tarball)
-      || registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + version + '.tgz';
+    const tgzUrl = (detail.versions && detail.versions[actualVersion] && detail.versions[actualVersion].tarball)
+      || registryUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + actualVersion + '.tgz';
     const mirrorTgzUrl = mirrorUrl + '/' + name + '/-/' + name.replace(/:/g, '%3A') + '-' + version + '.tgz';
 
     // 优先尝试官方源，失败再尝试镜像（镜像有时返回 302 导致下载失败）
