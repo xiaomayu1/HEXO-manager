@@ -1178,17 +1178,28 @@ async function loadPlugins() {
   if (!r.ok) { node.innerHTML = '<div class="empty">' + esc(r.error || '无法读取插件') + '</div>'; return; }
   if (!r.plugins || !r.plugins.length) { node.innerHTML = '<div class="empty">未发现已安装的 Hexo 插件。可在上方安装 hexo-* 插件。</div>'; return; }
   const catName = { deployer: '部署', generator: '生成', renderer: '渲染', plugin: '功能', other: '其他' };
-  const rows = r.plugins.map(p => {
+  const rows = await Promise.all(r.plugins.map(async p => {
+    // 检测是否有实质操作（非纯跳过）
+    let hasRealAction = false;
+    if (p.hasRecipe) {
+      const pv = await api.invoke('plugins:previewRecipe', p.name);
+      if (pv.ok && pv.writes) {
+        hasRealAction = pv.writes.some(w => w.action === 'append' || w.action === 'create' || w.action === 'set');
+      }
+    }
     const cfgBtn = p.hasRecipe
-      ? '<button class="btn" data-pl="' + esc(p.name) + '" data-act="cfg">配置</button>'
+      ? (hasRealAction
+        ? '<button class="btn primary" data-pl="' + esc(p.name) + '" data-act="cfg">配置</button>'
+        : '<button class="btn" data-pl="' + esc(p.name) + '" data-act="edit" title="配置已存在，无需修改">已配置</button>')
       : '<button class="btn" data-pl="' + esc(p.name) + '" data-act="edit">编辑配置</button>';
     return '<tr>'
       + '<td><strong>' + esc(p.name) + '</strong></td>'
       + '<td><span class="chip">' + esc(catName[p.category] || p.category || '插件') + '</span></td>'
       + '<td>' + esc(p.version || '—') + '</td>'
       + '<td class="row-actions"><button class="btn danger" data-pl="' + esc(p.name) + '" data-act="rm">卸载</button>' + cfgBtn + '</td></tr>';
-  }).join('');
-  node.innerHTML = '<table><thead><tr><th>插件</th><th>类型</th><th>版本</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }));
+  const rowsHtml = rows.join('');
+  node.innerHTML = '<table><thead><tr><th>插件</th><th>类型</th><th>版本</th><th>操作</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
   $$('#pl-list [data-pl]').forEach(b => b.onclick = async () => {
     const name = b.dataset.pl, act = b.dataset.act;
     if (act === 'cfg') return openRecipePreview(name);
