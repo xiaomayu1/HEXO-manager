@@ -985,15 +985,14 @@ const POPULAR_THEMES = [
 
 // ===== themes & plugins =====
 async function renderThemes() {
-  $('#content').innerHTML = '<h1 class="page-title">主题/插件管理</h1>'
+  $('#content').innerHTML = '<h1 class="page-title">插件管理</h1>'
     + '<div class="page-wrap">'
-    + '<div class="section"><h2>已安装主题</h2><div id="th-list">加载中…</div></div>'
     + '<div class="section"><h2>已安装插件</h2><div id="pl-list">加载中…</div></div>'
-    + '<div class="section" id="archived-section" style="display:none"><h2>归档的主题配置</h2><div id="th-archived">加载中…</div></div>'
+    + '<div class="section"><h2>推荐主题</h2><div id="th-recommended">加载中…</div></div>'
     + '</div>';
   // 离开预览页时关闭 F11 劫持
   api.invoke('preview:setF11Hook', false).catch(() => {});
-  loadThemes(); loadPlugins(); loadArchivedConfigs();
+  loadPlugins(); loadRecommendedThemes();
 }
 async function refreshThemeHint() {
   const b = await api.invoke('settings:blogConfig');
@@ -2380,6 +2379,40 @@ function cancelDownload() {
   _marketDownloading = null;
   $('#market-dl-modal').classList.add('hidden');
   toast('已取消', 'warn');
+}
+
+// ===== 推荐主题 =====
+async function loadRecommendedThemes() {
+  const node = $('#th-recommended');
+  if (!node) return;
+  // Use global POPULAR_THEMES (already defined earlier in file)
+  node.innerHTML = '<div class="market-rec-grid">' + POPULAR_THEMES.slice(0, 4).map(t => `
+    <div class="market-rec-card">
+      <div class="market-rec-top">
+        <div class="market-rec-icon">${esc(t.name[0].toUpperCase())}</div>
+        <div class="market-rec-info">
+          <div class="market-rec-name">${esc(t.name)}</div>
+          <div class="market-rec-desc">${esc(t.desc)} · ⭐ ${esc(t.stars)}</div>
+        </div>
+      </div>
+      <div class="market-rec-actions">
+        <button class="btn primary btn-sm" data-mr-install="${esc(t.name)}">安装</button>
+        <button class="btn btn-sm" data-mr-repo="${esc(t.repo)}">GitHub</button>
+      </div>
+    </div>`).join('') + '</div>';
+  node.querySelectorAll('[data-mr-install]').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.mrInstall;
+      toast(`正在安装 ${name}...`);
+      const r = await api.invoke('market:installTheme', name);
+      if (!r.ok) return toast(r.error || '安装失败', 'danger');
+      toast(`已安装 ${r.name}`, 'ok');
+      loadPlugins();
+    };
+  });
+  node.querySelectorAll('[data-mr-repo]').forEach(btn => {
+    btn.onclick = () => api.invoke('preview:openBrowser', btn.dataset.mrRepo);
+  });
 }
 
 // ===== boot =====

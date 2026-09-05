@@ -662,8 +662,12 @@ function createThemesService(opts) {
     if (plan.configAdded && plan.configAdded.length)
       writes.push({ kind: 'config', file: '_config.yml', action: 'append', label: '_config.yml — 追加 ' + plan.configAdded.join(', ') + ' 段' });
     if (plan.configSkipped && plan.configSkipped.length) {
-      const l = '_config.yml — 跳过 ' + plan.configSkipped.join(', ') + ' 段（已存在，未覆盖）';
-      writes.push({ kind: 'config', file: '_config.yml', action: 'skip', label: l }); skipped.push(l);
+      // 如果主题兼容且有 inject 配置，静默处理已存在的配置
+      const hasInject = plan.inject && plan.inject.compat;
+      if (!hasInject || plan.skippedSomeInject) {
+        const l = '_config.yml — 跳过 ' + plan.configSkipped.join(', ') + ' 段（已存在，未覆盖）';
+        writes.push({ kind: 'config', file: '_config.yml', action: 'skip', label: l }); skipped.push(l);
+      }
     }
     if (plan.permalinkAction === 'set') {
       const v = plan.permalinkExisting == null ? '(空)' : plan.permalinkExisting;
