@@ -329,7 +329,11 @@ function registerIpc() {
   // themes & plugins management (operate on the configured blog path)
   handle('themes:list', () => a.themes.listThemes(blogPathOf()));
   handle('themes:activate', (theme) => a.themes.activateTheme(blogPathOf(), theme));
-  handle('themes:uninstall', (theme) => a.themes.uninstallTheme(blogPathOf(), theme));
+  handle('themes:uninstall', (theme) => {
+    // Stop preview if running to avoid file locks on Windows
+    try { a.preview.stop(); } catch (_) {}
+    return a.themes.uninstallTheme(blogPathOf(), theme);
+  });
   handle('themes:install', (name) => a.themes.installTheme(blogPathOf(), name));
   handle('themes:listArchivedConfigs', () => a.themes.listArchivedConfigs(blogPathOf()));
   handle('themes:archiveConfig', (theme) => a.themes.archiveConfig(blogPathOf(), theme));
