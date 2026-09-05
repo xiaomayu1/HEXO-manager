@@ -1002,39 +1002,6 @@ async function refreshThemeHint() {
     : '未配置博客本地路径，功能不可用 · <button class="pill-link" id="th-goset">去设置</button>';
   const go = $('#th-goset'); if (go) go.onclick = () => navigate('settings');
 }
-// 渲染主题市场推荐卡片
-function renderThemeMarket() {
-  const node = $('#th-market'); if (!node) return;
-  node.innerHTML = '<div class="market-rec-grid">' + POPULAR_THEMES.map(t => `
-    <div class="market-rec-card">
-      <div class="market-rec-top">
-        <div class="market-rec-icon">${esc(t.name[0].toUpperCase())}</div>
-        <div class="market-rec-info">
-          <div class="market-rec-name">${esc(t.name)}</div>
-          <div class="market-rec-desc">${esc(t.desc)}</div>
-        </div>
-      </div>
-      <div class="market-rec-stars">⭐ ${esc(t.stars)}</div>
-      <div class="market-rec-actions">
-        <button class="btn primary btn-sm" data-mr-install="${esc(t.name)}">安装</button>
-        <button class="btn btn-sm" data-mr-repo="${esc(t.repo)}">GitHub</button>
-      </div>
-    </div>`).join('') + '</div>';
-  node.querySelectorAll('[data-mr-install]').forEach(btn => {
-    btn.onclick = async () => {
-      const name = btn.dataset.mrInstall;
-      toast(`正在安装 ${name}...`);
-      // Use market service (downloads & extracts tgz), NOT npm install
-      const r = await api.invoke('market:installTheme', name);
-      if (!r.ok) return toast(r.error || '安装失败', 'danger');
-      toast(`已安装 ${r.name}`, 'ok');
-      loadThemes();
-    };
-  });
-  node.querySelectorAll('[data-mr-repo]').forEach(btn => {
-    btn.onclick = () => api.invoke('preview:openBrowser', btn.dataset.mrRepo);
-  });
-}
 async function loadThemes() {
   const node = $('#th-list'); node.innerHTML = '加载中…';
   const r = await api.invoke('themes:list');
